@@ -5,6 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.argv[2];
 if (!GITHUB_TOKEN) {
@@ -117,6 +118,11 @@ async function main() {
   for (const file of files) {
     process.stdout.write(`  Syncing ${file.path}... `);
 
+    // Compute Git SHA-1 for blob: sha1("blob " + size + "\0" + content)
+    const localSha = crypto.createHash('sha1')
+      .update(Buffer.concat([Buffer.from(`blob ${file.content.length}\0`), file.content]))
+      .digest('hex');
+
     // Check if file already exists in repo to get its SHA
     let existingSha;
     try {
@@ -126,6 +132,11 @@ async function main() {
       }
     } catch {
       // file does not exist yet
+    }
+
+    if (existingSha && existingSha === localSha) {
+      console.log('✅ (Up to date)');
+      continue;
     }
 
     const uploadBody = {
@@ -143,15 +154,41 @@ async function main() {
     });
 
     if (putRes.status === 200 || putRes.status === 201) {
-      console.log('✅');
+      console.log('✅ Updated');
     } else {
       console.log(`⚠️ (Status ${putRes.status})`);
     }
   }
 
+  // Enable / check GitHub Pages
+  let pagesUrl = `https://${username}.github.io/${REPO_NAME}/`;
+  try {
+    console.log('\n📄 Checking GitHub Pages status...');
+    const pagesCheck = await githubRequest(`https://api.github.com/repos/${username}/${REPO_NAME}/pages`);
+    if (pagesCheck.status === 200 && pagesCheck.data?.html_url) {
+      pagesUrl = pagesCheck.data.html_url;
+      console.log(`✅ GitHub Pages active: ${pagesUrl}`);
+    } else {
+      console.log('Enabling GitHub Pages on main branch...');
+      const enablePages = await githubRequest(`https://api.github.com/repos/${username}/${REPO_NAME}/pages`, {
+        method: 'POST',
+        body: JSON.stringify({
+          source: { branch: repo.default_branch || 'main', path: '/' }
+        })
+      });
+      if (enablePages.status === 201 && enablePages.data?.html_url) {
+        pagesUrl = enablePages.data.html_url;
+        console.log(`✅ GitHub Pages enabled: ${pagesUrl}`);
+      }
+    }
+  } catch (err) {
+    console.log(`ℹ️ GitHub Pages note: ${err.message}`);
+  }
+
   console.log('\n=============================================================');
   console.log(`🎉 SUCCESS! GitHub Repository Published Successfully:`);
-  console.log(`👉 ${repo.html_url}`);
+  console.log(`👉 Repo:  ${repo.html_url}`);
+  console.log(`👉 Pages: ${pagesUrl}`);
   console.log('=============================================================\n');
 }
 
