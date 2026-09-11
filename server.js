@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
@@ -13,7 +14,11 @@ let customOpenSeaApiKey = process.env.OPENSEA_API_KEY || '';
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Serve static assets from both public and root directory
 app.use(express.static(path.join(__dirname, 'public')));
+app.use('/data', express.static(path.join(__dirname, 'data')));
+app.use(express.static(__dirname));
 
 // Cache storage
 let cache = {
@@ -27,32 +32,43 @@ const CACHE_TTL_MS = 60 * 1000; // 60 seconds
  * Fetch Sunflower Land items from default live market provider
  */
 async function fetchFromLiveMarket() {
-  const response = await fetch('https://sfl.world/api/v1/nfts', {
-    headers: {
-      'User-Agent': 'SunflowerLandPriceTracker/1.0',
-      'Accept': 'application/json'
+  try {
+    const response = await fetch('https://sfl.world/api/v1/nfts', {
+      headers: {
+        'User-Agent': 'SunflowerLandPriceTracker/1.0',
+        'Accept': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Market provider returned status ${response.status}`);
     }
-  });
 
-  if (!response.ok) {
-    throw new Error(`Market provider returned status ${response.status}`);
+    const json = await response.json();
+    const rawList = json.collectibles || [];
+
+    return rawList.map(item => ({
+      id: item.id,
+      name: item.name || `Collectible #${item.id}`,
+      floorPrice: typeof item.floor === 'number' ? item.floor : parseFloat(item.floor) || 0,
+      lastSalePrice: typeof item.lastSalePrice === 'number' ? item.lastSalePrice : parseFloat(item.lastSalePrice) || 0,
+      supply: item.supply || 0,
+      haveBoost: Boolean(item.have_boost),
+      boostText: item.boost_text || '',
+      openseaUrl: `https://opensea.io/assets/matic/${CONTRACT_ADDRESS}/${item.id}`,
+      contract: CONTRACT_ADDRESS,
+      chain: 'polygon'
+    }));
+  } catch (err) {
+    // Fallback to local snapshot if available
+    const snapshotPath = path.join(__dirname, 'data', 'prices.json');
+    if (fs.existsSync(snapshotPath)) {
+      console.log('Loading fallback from local data/prices.json');
+      const snap = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+      return snap.items || [];
+    }
+    throw err;
   }
-
-  const json = await response.json();
-  const rawList = json.collectibles || [];
-
-  return rawList.map(item => ({
-    id: item.id,
-    name: item.name || `Collectible #${item.id}`,
-    floorPrice: typeof item.floor === 'number' ? item.floor : parseFloat(item.floor) || 0,
-    lastSalePrice: typeof item.lastSalePrice === 'number' ? item.lastSalePrice : parseFloat(item.lastSalePrice) || 0,
-    supply: item.supply || 0,
-    haveBoost: Boolean(item.have_boost),
-    boostText: item.boost_text || '',
-    openseaUrl: `https://opensea.io/assets/matic/${CONTRACT_ADDRESS}/${item.id}`,
-    contract: CONTRACT_ADDRESS,
-    chain: 'polygon'
-  }));
 }
 
 /**
@@ -115,21 +131,19 @@ async function getCollectibles(forceRefresh = false) {
   let items = [];
   let provider = 'Live Market Aggregator';
 
-  // If user configured an OpenSea API key, try OpenSea v2 API first
   if (customOpenSeaApiKey) {
     try {
       items = await fetchFromOpenSea(customOpenSeaApiKey);
       provider = 'OpenSea v2 API (Direct)';
     } catch (err) {
-      console.warn('OpenSea API failed, falling back to Live Market Provider:', err.message);
+      console.warn('OpenSea API failed, falling back to Market Provider:', err.message);
       items = await fetchFromLiveMarket();
-      provider = `Live Market Aggregator (OpenSea fallback: ${err.message})`;
+      provider = `Live Market Aggregator (OpenSea fallback)`;
     }
   } else {
     items = await fetchFromLiveMarket();
   }
 
-  // Sort by floor price ascending by default
   items.sort((a, b) => a.floorPrice - b.floorPrice);
 
   cache = {
@@ -155,7 +169,6 @@ app.get('/api/prices', async (req, res) => {
 
     let filtered = [...items];
 
-    // Search filter
     if (req.query.search) {
       const q = req.query.search.toLowerCase().trim();
       filtered = filtered.filter(item => 
@@ -163,14 +176,12 @@ app.get('/api/prices', async (req, res) => {
       );
     }
 
-    // Boost filter
     if (req.query.boost === 'true') {
       filtered = filtered.filter(item => item.haveBoost);
     } else if (req.query.boost === 'false') {
       filtered = filtered.filter(item => !item.haveBoost);
     }
 
-    // Price range filters
     if (req.query.minPrice) {
       const min = parseFloat(req.query.minPrice);
       if (!isNaN(min)) filtered = filtered.filter(item => item.floorPrice >= min);
@@ -180,7 +191,6 @@ app.get('/api/prices', async (req, res) => {
       if (!isNaN(max)) filtered = filtered.filter(item => item.floorPrice <= max);
     }
 
-    // Sorting
     const sort = req.query.sort || 'price_asc';
     if (sort === 'price_asc') {
       filtered.sort((a, b) => a.floorPrice - b.floorPrice);
@@ -254,15 +264,15 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-// 3. POST /api/settings - configure OpenSea API Key at runtime
+// 3. POST /api/settings
 app.post('/api/settings', (req, res) => {
   const { apiKey } = req.body;
   customOpenSeaApiKey = (apiKey || '').trim();
-  cache.data = null; // Invalidate cache
+  cache.data = null;
   res.json({
     success: true,
     hasApiKey: Boolean(customOpenSeaApiKey),
-    message: customOpenSeaApiKey ? 'OpenSea API Key updated successfully.' : 'API Key cleared. Using live market feed.'
+    message: customOpenSeaApiKey ? 'OpenSea API Key updated successfully.' : 'API Key cleared.'
   });
 });
 
@@ -277,8 +287,12 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Fallback to index.html
+// Fallback to root index.html or public/index.html
 app.get('*', (req, res) => {
+  const rootIndex = path.join(__dirname, 'index.html');
+  if (fs.existsSync(rootIndex)) {
+    return res.sendFile(rootIndex);
+  }
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
