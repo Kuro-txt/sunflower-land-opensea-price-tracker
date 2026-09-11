@@ -79,17 +79,17 @@
       <!-- Floor Price -->
       <div class="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-5 relative overflow-hidden group hover:border-amber-500/40 transition">
         <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider mb-2">
-          <span>Collection Floor</span>
+          <span>OpenSea Floor</span>
           <span class="p-1.5 rounded-lg bg-amber-500/10 text-amber-400">
             <i data-lucide="trending-up" class="w-4 h-4"></i>
           </span>
         </div>
         <div class="flex items-baseline space-x-2">
           <span id="statFloor" class="text-3xl font-extrabold text-white tracking-tight">--</span>
-          <span class="text-xs font-bold text-amber-400">POL / MATIC</span>
+          <span class="text-xs font-bold text-blue-400">WETH</span>
         </div>
         <p class="text-[11px] text-slate-500 mt-2 flex items-center space-x-1">
-          <span>Cheapest listed item</span>
+          <span>Lowest active OpenSea listing</span>
         </p>
       </div>
 
@@ -103,7 +103,7 @@
         </div>
         <div class="flex items-baseline space-x-2">
           <span id="statTotalItems" class="text-3xl font-extrabold text-white tracking-tight">--</span>
-          <span class="text-xs font-medium text-slate-400">unique items</span>
+          <span class="text-xs font-medium text-slate-400">collectibles</span>
         </div>
         <p class="text-[11px] text-slate-500 mt-2">
           <span id="statBoostCount">--</span> with in-game utility boost
@@ -120,10 +120,10 @@
         </div>
         <div class="flex items-baseline space-x-2">
           <span id="statMedian" class="text-3xl font-extrabold text-white tracking-tight">--</span>
-          <span class="text-xs font-bold text-blue-400">POL</span>
+          <span class="text-xs font-bold text-blue-400">WETH</span>
         </div>
         <p class="text-[11px] text-slate-500 mt-2">
-          Average: <span id="statAvg">--</span> POL
+          Average: <span id="statAvg">--</span> WETH
         </p>
       </div>
 
@@ -195,9 +195,10 @@
         <button data-filter="all" class="filter-pill active">All Items</button>
         <button data-filter="boost" class="filter-pill">⚡ With Boosts</button>
         <button data-filter="cosmetic" class="filter-pill">🎨 Cosmetic Only</button>
-        <button data-filter="tier-cheap" class="filter-pill">🪙 &lt; 1 POL</button>
-        <button data-filter="tier-mid" class="filter-pill">💎 1 – 10 POL</button>
-        <button data-filter="tier-high" class="filter-pill">👑 &gt; 10 POL</button>
+        <button data-filter="tier-cheap" class="filter-pill">🪙 &lt; 0.0005 WETH</button>
+        <button data-filter="tier-mid" class="filter-pill">💎 0.0005 – 0.005 WETH</button>
+        <button data-filter="tier-high" class="filter-pill">👑 &gt; 0.005 WETH</button>
+        <button data-filter="unlisted" class="filter-pill">🚫 Unlisted</button>
       </div>
     </div>
 
@@ -207,8 +208,8 @@
         Showing <span id="filteredCount" class="font-bold text-white">0</span> of <span id="totalCount" class="font-bold text-white">0</span> items
       </div>
       <div class="flex items-center space-x-2">
-        <span class="w-2 h-2 rounded-full bg-amber-400"></span>
-        <span>Prices listed in POL (Polygon)</span>
+        <span class="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>
+        <span>Prices in WETH from OpenSea Official API</span>
       </div>
     </div>
 
