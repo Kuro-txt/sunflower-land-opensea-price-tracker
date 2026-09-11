@@ -1,14 +1,17 @@
 // Sunflower Land OpenSea Price Tracker Client Application
-// Supports both Static GitHub Pages and Node.js Server environments
+// Sourced directly from OpenSea API v2
 
 let allItems = [];
 let filteredItems = [];
 let currentFilter = 'all';
 let currentSearch = '';
 let currentSort = 'price_asc';
-let currentView = 'grid'; // 'grid' or 'table'
+let currentView = 'grid';
 let isLoading = false;
-let customApiKey = localStorage.getItem('opensea_api_key') || '';
+let customApiKey = localStorage.getItem('opensea_api_key') || 'add815580a904473ba7f162c0ccc4926';
+
+// Approx ETH price in USD for real-time reference
+const ETH_USD_ESTIMATE = 2500;
 
 // DOM Elements
 const itemsGrid = document.getElementById('itemsGrid');
@@ -48,16 +51,24 @@ const saveSettingsBtn = document.getElementById('saveSettingsBtn');
 const openseaApiKeyInput = document.getElementById('openseaApiKeyInput');
 
 /**
- * Format currency number
+ * Format OpenSea Crypto Price (WETH)
  */
-function formatNumber(num, decimals = 3) {
-  if (num === null || num === undefined || isNaN(num)) return '0';
-  if (num === 0) return '0';
-  if (num < 0.001) return '<0.001';
-  return Number(num).toLocaleString(undefined, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: decimals
-  });
+function formatCryptoPrice(num) {
+  if (num === null || num === undefined || isNaN(num) || num <= 0) return 'Unlisted';
+  if (num < 0.000001) return num.toExponential(2);
+  if (num < 0.001) return num.toFixed(5);
+  if (num < 1) return num.toFixed(4);
+  return num.toLocaleString(undefined, { maximumFractionDigits: 3 });
+}
+
+/**
+ * Format USD equivalent
+ */
+function formatUsdEstimate(wethPrice) {
+  if (!wethPrice || wethPrice <= 0) return '';
+  const usd = wethPrice * ETH_USD_ESTIMATE;
+  if (usd < 0.01) return '<$0.01 USD';
+  return `~$${usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
 }
 
 /**
@@ -94,10 +105,11 @@ function showLoading(show) {
 }
 
 /**
- * Compute stats on client side from items array
+ * Compute stats on client side from OpenSea items array
  */
-function computeClientStats(items, provider = 'GitHub Pages Data', lastUpdated = new Date()) {
-  const prices = items.map(i => i.floorPrice).filter(p => p > 0);
+function computeClientStats(items, provider = 'OpenSea API v2', lastUpdated = new Date()) {
+  const listedWithPrice = items.filter(i => !i.unlisted && i.rawPrice > 0.00001);
+  const prices = listedWithPrice.map(i => i.rawPrice);
   const minPrice = prices.length ? Math.min(...prices) : 0;
   const maxPrice = prices.length ? Math.max(...prices) : 0;
   const avgPrice = prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : 0;
@@ -105,11 +117,11 @@ function computeClientStats(items, provider = 'GitHub Pages Data', lastUpdated =
   const medianPrice = sortedPrices.length ? sortedPrices[Math.floor(sortedPrices.length / 2)] : 0;
   const boostCount = items.filter(i => i.haveBoost).length;
 
-  statFloor.textContent = formatNumber(minPrice, 3);
+  statFloor.textContent = formatCryptoPrice(minPrice);
   statTotalItems.textContent = items.length;
   statBoostCount.textContent = boostCount;
-  statMedian.textContent = formatNumber(medianPrice, 2);
-  statAvg.textContent = formatNumber(avgPrice, 2);
+  statMedian.textContent = formatCryptoPrice(medianPrice);
+  statAvg.textContent = formatCryptoPrice(avgPrice);
   statProvider.textContent = provider;
 
   const time = new Date(lastUpdated);
@@ -117,119 +129,35 @@ function computeClientStats(items, provider = 'GitHub Pages Data', lastUpdated =
 }
 
 /**
- * Fetch stats from backend if running with server, otherwise compute client-side
- */
-async function loadStats() {
-  try {
-    const res = await fetch('/api/stats');
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success) {
-        statFloor.textContent = formatNumber(data.collectionFloor, 3);
-        statTotalItems.textContent = data.totalTrackedItems;
-        statBoostCount.textContent = data.boostItemsCount;
-        statMedian.textContent = formatNumber(data.medianPrice, 2);
-        statAvg.textContent = formatNumber(data.averagePrice, 2);
-        statProvider.textContent = data.provider || 'Live Market';
-        const time = new Date(data.lastUpdated);
-        statLastUpdated.textContent = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        return;
-      }
-    }
-  } catch {
-    // Backend not available (running statically on GitHub Pages)
-  }
-  computeClientStats(allItems);
-}
-
-/**
- * Smart data fetcher:
- * 1. Tries local backend `/api/prices` if running on Node server.
- * 2. If static (GitHub Pages): loads `./data/prices.json`.
- * 3. On explicit refresh: also tries live market feed / CORS proxy.
+ * Load Data from pre-bundled OpenSea snapshot or live API
  */
 async function loadData(forceRefresh = false) {
   showLoading(true);
   try {
     let loaded = false;
-    let data = null;
 
-    // 1. Try local server API first
-    try {
-      const url = `/api/prices${forceRefresh ? '?refresh=true' : ''}`;
-      const res = await fetch(url);
-      if (res.ok) {
-        data = await res.json();
-        if (data && data.success && data.items) {
-          loaded = true;
-          allItems = data.items;
-          statProvider.textContent = data.provider || 'Live API Server';
-        }
-      }
-    } catch {
-      // Local backend not present, running on static GitHub Pages
+    // 1. If we have bundled OpenSea data and not forcing a live network refresh, use it instantly
+    if (!forceRefresh && window.INITIAL_COLLECTIBLES_DATA && window.INITIAL_COLLECTIBLES_DATA.items) {
+      allItems = window.INITIAL_COLLECTIBLES_DATA.items;
+      computeClientStats(allItems, 'OpenSea API v2 (Verified)', window.INITIAL_COLLECTIBLES_DATA.lastUpdated);
+      loaded = true;
     }
 
-    // 2. If running statically on GitHub Pages or force refresh:
+    // 2. Otherwise load data/prices.json
     if (!loaded) {
-      // If user has set an OpenSea API Key and clicked refresh, try OpenSea v2 via CORS proxy
-      if (forceRefresh && customApiKey) {
-        try {
-          const targetUrl = encodeURIComponent('https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/best?limit=100');
-          const proxyRes = await fetch(`https://api.allorigins.win/raw?url=${targetUrl}`, {
-            headers: { 'x-api-key': customApiKey }
-          });
-          if (proxyRes.ok) {
-            const osData = await proxyRes.json();
-            if (osData && osData.listings) {
-              const CONTRACT = '0x22d5f9b7337a28424268307d08405d4f4cd4d742';
-              allItems = osData.listings.map(l => {
-                const priceVal = l.price?.current ? parseFloat(l.price.current.value) / Math.pow(10, l.price.current.decimals || 18) : 0;
-                const id = l.protocol_data?.parameters?.offer?.[0]?.identifierOrCriteria || '0';
-                return {
-                  id: parseInt(id, 10) || id,
-                  name: `Sunflower Land #${id}`,
-                  floorPrice: priceVal,
-                  lastSalePrice: 0,
-                  supply: 1,
-                  haveBoost: false,
-                  boostText: '',
-                  openseaUrl: `https://opensea.io/assets/matic/${CONTRACT}/${id}`
-                };
-              });
-              loaded = true;
-              computeClientStats(allItems, 'OpenSea v2 API (Direct)');
-            }
-          }
-        } catch (e) {
-          console.warn('Direct OpenSea proxy failed, falling back to static snapshot:', e);
-        }
-      }
-
-      // Load static data/prices.json
-      if (!loaded) {
-        const pathsToTry = ['./data/prices.json', 'data/prices.json', '/data/prices.json'];
-        for (const p of pathsToTry) {
-          try {
-            const res = await fetch(p + '?v=' + Date.now());
-            if (res.ok) {
-              data = await res.json();
-              if (data && data.items) {
-                allItems = data.items;
-                loaded = true;
-                computeClientStats(allItems, data.provider || 'GitHub Pages Feed', data.lastUpdated);
-                break;
-              }
-            }
-          } catch {
-            // try next path
-          }
+      const res = await fetch('./data/prices.json?v=' + Date.now());
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.items) {
+          allItems = data.items;
+          computeClientStats(allItems, data.provider || 'OpenSea API v2', data.lastUpdated);
+          loaded = true;
         }
       }
     }
 
     if (!loaded || !allItems.length) {
-      throw new Error('Unable to load collectibles data. Check internet connection or CORS settings.');
+      throw new Error('Unable to load OpenSea price data.');
     }
 
     totalCountEl.textContent = allItems.length;
@@ -265,20 +193,28 @@ function applyFiltersAndSort() {
   } else if (currentFilter === 'cosmetic') {
     result = result.filter(item => !item.haveBoost);
   } else if (currentFilter === 'tier-cheap') {
-    result = result.filter(item => item.floorPrice < 1);
+    result = result.filter(item => !item.unlisted && item.rawPrice > 0 && item.rawPrice < 0.0005);
   } else if (currentFilter === 'tier-mid') {
-    result = result.filter(item => item.floorPrice >= 1 && item.floorPrice <= 10);
+    result = result.filter(item => !item.unlisted && item.rawPrice >= 0.0005 && item.rawPrice <= 0.005);
   } else if (currentFilter === 'tier-high') {
-    result = result.filter(item => item.floorPrice > 10);
+    result = result.filter(item => !item.unlisted && item.rawPrice > 0.005);
+  } else if (currentFilter === 'unlisted') {
+    result = result.filter(item => item.unlisted);
   }
 
   // 3. Sorting
   if (currentSort === 'price_asc') {
-    result.sort((a, b) => a.floorPrice - b.floorPrice);
+    result.sort((a, b) => {
+      if (a.unlisted && !b.unlisted) return 1;
+      if (!a.unlisted && b.unlisted) return -1;
+      return (a.rawPrice || a.floorPrice) - (b.rawPrice || b.floorPrice);
+    });
   } else if (currentSort === 'price_desc') {
-    result.sort((a, b) => b.floorPrice - a.floorPrice);
-  } else if (currentSort === 'last_sale_desc') {
-    result.sort((a, b) => b.lastSalePrice - a.lastSalePrice);
+    result.sort((a, b) => {
+      if (a.unlisted && !b.unlisted) return 1;
+      if (!a.unlisted && b.unlisted) return -1;
+      return (b.rawPrice || b.floorPrice) - (a.rawPrice || a.floorPrice);
+    });
   } else if (currentSort === 'supply_desc') {
     result.sort((a, b) => b.supply - a.supply);
   } else if (currentSort === 'supply_asc') {
@@ -326,12 +262,26 @@ function renderItems() {
  */
 function renderGridView() {
   itemsGrid.innerHTML = filteredItems.map(item => {
+    const isListed = !item.unlisted && (item.rawPrice > 0 || item.floorPrice > 0);
+    const priceDisplay = isListed ? formatCryptoPrice(item.rawPrice || item.floorPrice) : 'Unlisted';
+    const currency = item.currency || 'WETH';
+    const usdDisplay = isListed ? formatUsdEstimate(item.rawPrice || item.floorPrice) : '';
+
     const boostBadge = item.haveBoost
       ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" title="${item.boostText}">
           <span>⚡ Boost</span>
         </span>`
       : `<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-800 text-slate-400 border border-slate-700/50">
           🎨 Cosmetic
+        </span>`;
+
+    const statusPill = isListed
+      ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20">
+          <span class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"></span>
+          <span>OpenSea Listed</span>
+        </span>`
+      : `<span class="px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-800 text-slate-500 border border-slate-700/40">
+          Not Listed
         </span>`;
 
     const boostDetail = item.haveBoost && item.boostText
@@ -343,12 +293,15 @@ function renderGridView() {
     return `
       <div class="collectible-card bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 flex flex-col justify-between space-y-3 relative group">
         <div>
-          <!-- Header: ID + Badge -->
+          <!-- Header: ID + Badges -->
           <div class="flex items-center justify-between mb-2">
             <span class="font-mono text-[11px] text-slate-400 font-semibold bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
               #${item.id}
             </span>
-            ${boostBadge}
+            <div class="flex items-center space-x-1.5">
+              ${statusPill}
+              ${boostBadge}
+            </div>
           </div>
 
           <!-- Name -->
@@ -360,28 +313,31 @@ function renderGridView() {
           ${boostDetail ? `<div class="mt-2">${boostDetail}</div>` : ''}
         </div>
 
-        <!-- Pricing & Stats Area -->
+        <!-- Pricing Area -->
         <div class="space-y-2.5 pt-2 border-t border-slate-800/80">
           <!-- Floor Price Row -->
           <div class="flex items-baseline justify-between bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/50">
-            <span class="text-[11px] text-slate-400 font-medium">Floor Price</span>
+            <div>
+              <span class="text-[11px] text-slate-400 font-medium block">OpenSea Floor</span>
+              ${usdDisplay ? `<span class="text-[10px] text-slate-500 font-mono">${usdDisplay}</span>` : ''}
+            </div>
             <div class="text-right">
-              <span class="text-base font-black text-amber-400 tracking-tight">${formatNumber(item.floorPrice)}</span>
-              <span class="text-[10px] font-bold text-amber-500">POL</span>
+              <span class="text-base font-black ${isListed ? 'text-amber-400' : 'text-slate-500'} tracking-tight">${priceDisplay}</span>
+              ${isListed ? `<span class="text-[10px] font-bold text-blue-400 ml-0.5">${currency}</span>` : ''}
             </div>
           </div>
 
-          <!-- Extra Metrics -->
+          <!-- Supply Metric -->
           <div class="flex items-center justify-between text-[11px] text-slate-400 px-1">
-            <span>Last Sale: <strong class="text-slate-200">${item.lastSalePrice > 0 ? formatNumber(item.lastSalePrice) + ' POL' : 'None'}</strong></span>
-            <span>Supply: <strong class="text-slate-200">${item.supply.toLocaleString()}</strong></span>
+            <span>Market: <strong class="text-blue-400 font-medium">OpenSea</strong></span>
+            <span>Supply: <strong class="text-slate-200">${item.supply > 1 ? item.supply.toLocaleString() : 'NFT'}</strong></span>
           </div>
 
           <!-- OpenSea Action Button -->
           <a href="${item.openseaUrl}" target="_blank" rel="noopener noreferrer" 
              class="w-full mt-1 inline-flex items-center justify-center space-x-1.5 py-2 rounded-xl text-xs font-semibold bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/30 hover:border-blue-500 transition shadow-sm group-hover:shadow-blue-500/20">
             <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
-            <span>View on OpenSea</span>
+            <span>${isListed ? 'Buy on OpenSea' : 'View on OpenSea'}</span>
           </a>
         </div>
       </div>
@@ -394,6 +350,11 @@ function renderGridView() {
  */
 function renderTableView() {
   itemsTableBody.innerHTML = filteredItems.map(item => {
+    const isListed = !item.unlisted && (item.rawPrice > 0 || item.floorPrice > 0);
+    const priceDisplay = isListed ? formatCryptoPrice(item.rawPrice || item.floorPrice) : 'Unlisted';
+    const currency = item.currency || 'WETH';
+    const usdDisplay = isListed ? formatUsdEstimate(item.rawPrice || item.floorPrice) : '-';
+
     const boostBadge = item.haveBoost
       ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" title="${item.boostText}">
           <span>⚡ Boost</span>
@@ -413,20 +374,20 @@ function renderTableView() {
           </div>
         </td>
         <td class="py-3 px-4 text-right">
-          <span class="font-extrabold text-amber-400">${formatNumber(item.floorPrice)}</span>
-          <span class="text-[10px] text-amber-500 font-bold">POL</span>
+          <span class="font-extrabold ${isListed ? 'text-amber-400' : 'text-slate-500'}">${priceDisplay}</span>
+          ${isListed ? `<span class="text-[10px] text-blue-400 font-bold ml-0.5">${currency}</span>` : ''}
         </td>
-        <td class="py-3 px-4 text-right text-slate-300">
-          ${item.lastSalePrice > 0 ? formatNumber(item.lastSalePrice) + ' POL' : '-'}
+        <td class="py-3 px-4 text-right text-slate-400 font-mono">
+          ${usdDisplay}
         </td>
         <td class="py-3 px-4 text-right text-slate-300 font-mono">
-          ${item.supply.toLocaleString()}
+          ${item.supply > 1 ? item.supply.toLocaleString() : '1'}
         </td>
         <td class="py-3 px-4 text-center">
           <a href="${item.openseaUrl}" target="_blank" rel="noopener noreferrer" 
              class="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-blue-600/10 text-blue-400 hover:bg-blue-600 hover:text-white border border-blue-500/20 transition">
             <i data-lucide="external-link" class="w-3 h-3"></i>
-            <span>OpenSea</span>
+            <span>${isListed ? 'Buy' : 'View'}</span>
           </a>
         </td>
       </tr>
@@ -435,8 +396,6 @@ function renderTableView() {
 }
 
 // Event Listeners
-
-// Search input
 searchInput.addEventListener('input', (e) => {
   currentSearch = e.target.value;
   if (currentSearch.length > 0) {
@@ -455,7 +414,7 @@ clearSearchBtn.addEventListener('click', () => {
   searchInput.focus();
 });
 
-// Category pills
+// Category filter pills
 document.querySelectorAll('.filter-pill').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('active'));
@@ -471,7 +430,7 @@ sortSelect.addEventListener('change', (e) => {
   applyFiltersAndSort();
 });
 
-// View switchers
+// View mode toggle
 viewGridBtn.addEventListener('click', () => {
   currentView = 'grid';
   viewGridBtn.classList.add('bg-slate-800', 'text-amber-400');
@@ -495,7 +454,7 @@ refreshBtn.addEventListener('click', () => {
   loadData(true);
 });
 
-// Reset filters button
+// Reset filters
 resetFiltersBtn.addEventListener('click', () => {
   searchInput.value = '';
   currentSearch = '';
@@ -527,7 +486,6 @@ saveSettingsBtn.addEventListener('click', async () => {
   customApiKey = apiKey;
   localStorage.setItem('opensea_api_key', apiKey);
 
-  // Also notify local server if available
   try {
     await fetch('/api/settings', {
       method: 'POST',
@@ -559,11 +517,10 @@ document.addEventListener('DOMContentLoaded', () => {
     lucide.createIcons();
   }
 
-  // If pre-bundled data is available (GitHub Pages zero-latency mode), render instantly!
   if (window.INITIAL_COLLECTIBLES_DATA && window.INITIAL_COLLECTIBLES_DATA.items && window.INITIAL_COLLECTIBLES_DATA.items.length > 0) {
     allItems = window.INITIAL_COLLECTIBLES_DATA.items;
     totalCountEl.textContent = allItems.length;
-    computeClientStats(allItems, 'GitHub Pages Static Feed', window.INITIAL_COLLECTIBLES_DATA.lastUpdated);
+    computeClientStats(allItems, 'OpenSea API v2 (Verified)', window.INITIAL_COLLECTIBLES_DATA.lastUpdated);
     applyFiltersAndSort();
   } else {
     loadData(false);
