@@ -108,7 +108,7 @@ function showLoading(show) {
  * Compute stats on client side from OpenSea items array
  */
 function computeClientStats(items, provider = 'OpenSea API v2', lastUpdated = new Date()) {
-  const listedWithPrice = items.filter(i => !i.unlisted && i.rawPrice > 0.00001);
+  const listedWithPrice = items.filter(i => !i.unlisted && i.rawPrice > 0.000000001);
   const prices = listedWithPrice.map(i => i.rawPrice);
   const minPrice = prices.length ? Math.min(...prices) : 0;
   const maxPrice = prices.length ? Math.max(...prices) : 0;
@@ -177,18 +177,21 @@ async function loadData(forceRefresh = false) {
 function applyFiltersAndSort() {
   let result = [...allItems];
 
-  // 1. Text Search Filter
+  // 1. Safe Text Search Filter (matches name, token ID with/without #, or utility boost)
   if (currentSearch) {
-    const q = currentSearch.toLowerCase();
-    result = result.filter(item => 
-      item.name.toLowerCase().includes(q) || 
-      String(item.id).includes(q) ||
-      (item.boostText && item.boostText.toLowerCase().includes(q))
-    );
+    const cleanQ = currentSearch.replace(/^#/, '').toLowerCase().trim();
+    result = result.filter(item => {
+      const name = (item.name || '').toLowerCase();
+      const idStr = String(item.id || '');
+      const boost = (item.boostText || '').toLowerCase();
+      return name.includes(cleanQ) || idStr.includes(cleanQ) || boost.includes(cleanQ);
+    });
   }
 
   // 2. Category Filter
-  if (currentFilter === 'boost') {
+  if (currentFilter === 'recently-sold') {
+    result = result.filter(item => item.recentlySold || (item.lastSalePrice && item.lastSalePrice > 0));
+  } else if (currentFilter === 'boost') {
     result = result.filter(item => item.haveBoost);
   } else if (currentFilter === 'cosmetic') {
     result = result.filter(item => !item.haveBoost);
@@ -203,24 +206,33 @@ function applyFiltersAndSort() {
   }
 
   // 3. Sorting
-  if (currentSort === 'price_asc') {
+  if (currentSort === 'recently_sold') {
+    result.sort((a, b) => {
+      const aTime = a.lastSaleTimestamp || 0;
+      const bTime = b.lastSaleTimestamp || 0;
+      if (bTime !== aTime) return bTime - aTime;
+      return (b.lastSalePrice || 0) - (a.lastSalePrice || 0);
+    });
+  } else if (currentSort === 'last_sale_desc') {
+    result.sort((a, b) => (b.lastSalePrice || 0) - (a.lastSalePrice || 0));
+  } else if (currentSort === 'price_asc') {
     result.sort((a, b) => {
       if (a.unlisted && !b.unlisted) return 1;
       if (!a.unlisted && b.unlisted) return -1;
-      return (a.rawPrice || a.floorPrice) - (b.rawPrice || b.floorPrice);
+      return (a.rawPrice || a.floorPrice || 0) - (b.rawPrice || b.floorPrice || 0);
     });
   } else if (currentSort === 'price_desc') {
     result.sort((a, b) => {
       if (a.unlisted && !b.unlisted) return 1;
       if (!a.unlisted && b.unlisted) return -1;
-      return (b.rawPrice || b.floorPrice) - (a.rawPrice || a.floorPrice);
+      return (b.rawPrice || b.floorPrice || 0) - (a.rawPrice || a.floorPrice || 0);
     });
   } else if (currentSort === 'supply_desc') {
-    result.sort((a, b) => b.supply - a.supply);
+    result.sort((a, b) => (b.supply || 0) - (a.supply || 0));
   } else if (currentSort === 'supply_asc') {
-    result.sort((a, b) => a.supply - b.supply);
+    result.sort((a, b) => (a.supply || 0) - (b.supply || 0));
   } else if (currentSort === 'name_asc') {
-    result.sort((a, b) => a.name.localeCompare(b.name));
+    result.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }
 
   filteredItems = result;
@@ -284,10 +296,26 @@ function renderGridView() {
           Not Listed
         </span>`;
 
+    const recentSaleBadge = item.recentlySold
+      ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+          <span>🔥 Sold</span>
+        </span>`
+      : '';
+
     const boostDetail = item.haveBoost && item.boostText
       ? `<p class="text-[11px] text-emerald-300/90 line-clamp-1 bg-emerald-950/40 px-2 py-1 rounded-lg border border-emerald-900/30" title="${item.boostText}">
           ${item.boostText}
         </p>`
+      : '';
+
+    const lastSaleDisplay = item.lastSalePrice > 0
+      ? `<div class="flex items-center justify-between bg-amber-950/20 px-2.5 py-1.5 rounded-xl border border-amber-900/30 text-[11px]">
+          <span class="text-amber-400 font-medium">Last Sold</span>
+          <div class="text-right">
+            <span class="font-bold text-amber-300 font-mono">${formatCryptoPrice(item.lastSalePrice)}</span>
+            <span class="text-[10px] text-amber-400/80 font-bold ml-0.5">${item.lastSaleCurrency || 'WETH'}</span>
+          </div>
+        </div>`
       : '';
 
     return `
@@ -299,6 +327,7 @@ function renderGridView() {
               #${item.id}
             </span>
             <div class="flex items-center space-x-1.5">
+              ${recentSaleBadge}
               ${statusPill}
               ${boostBadge}
             </div>
@@ -327,6 +356,9 @@ function renderGridView() {
             </div>
           </div>
 
+          <!-- Last Sold if available -->
+          ${lastSaleDisplay}
+
           <!-- Supply Metric -->
           <div class="flex items-center justify-between text-[11px] text-slate-400 px-1">
             <span>Market: <strong class="text-blue-400 font-medium">OpenSea</strong></span>
@@ -353,7 +385,7 @@ function renderTableView() {
     const isListed = !item.unlisted && (item.rawPrice > 0 || item.floorPrice > 0);
     const priceDisplay = isListed ? formatCryptoPrice(item.rawPrice || item.floorPrice) : 'Unlisted';
     const currency = item.currency || 'WETH';
-    const usdDisplay = isListed ? formatUsdEstimate(item.rawPrice || item.floorPrice) : '-';
+    const usdDisplay = isListed ? formatUsdEstimate(item.rawPrice || item.floorPrice) : '';
 
     const boostBadge = item.haveBoost
       ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" title="${item.boostText}">
@@ -363,10 +395,19 @@ function renderTableView() {
           Cosmetic
         </span>`;
 
+    const recentSaleBadge = item.recentlySold
+      ? `<span class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">🔥 Sold</span>`
+      : '';
+
     return `
       <tr class="hover:bg-slate-800/40 transition">
         <td class="py-3 px-4 font-mono text-slate-400 font-semibold">#${item.id}</td>
-        <td class="py-3 px-4 font-bold text-white">${item.name}</td>
+        <td class="py-3 px-4 font-bold text-white">
+          <div class="flex items-center">
+            <span>${item.name}</span>
+            ${recentSaleBadge}
+          </div>
+        </td>
         <td class="py-3 px-4">
           <div class="flex items-center space-x-2">
             ${boostBadge}
@@ -374,11 +415,17 @@ function renderTableView() {
           </div>
         </td>
         <td class="py-3 px-4 text-right">
-          <span class="font-extrabold ${isListed ? 'text-amber-400' : 'text-slate-500'}">${priceDisplay}</span>
-          ${isListed ? `<span class="text-[10px] text-blue-400 font-bold ml-0.5">${currency}</span>` : ''}
+          <div>
+            <span class="font-extrabold ${isListed ? 'text-amber-400' : 'text-slate-500'}">${priceDisplay}</span>
+            ${isListed ? `<span class="text-[10px] text-blue-400 font-bold ml-0.5">${currency}</span>` : ''}
+          </div>
+          ${usdDisplay && isListed ? `<span class="text-[10px] text-slate-500 font-mono block">${usdDisplay}</span>` : ''}
         </td>
-        <td class="py-3 px-4 text-right text-slate-400 font-mono">
-          ${usdDisplay}
+        <td class="py-3 px-4 text-right">
+          ${item.lastSalePrice > 0 ? `
+            <span class="font-bold text-amber-300 font-mono">${formatCryptoPrice(item.lastSalePrice)}</span>
+            <span class="text-[10px] text-amber-400/80 font-bold ml-0.5">${item.lastSaleCurrency || 'WETH'}</span>
+          ` : `<span class="text-slate-600">-</span>`}
         </td>
         <td class="py-3 px-4 text-right text-slate-300 font-mono">
           ${item.supply > 1 ? item.supply.toLocaleString() : '1'}
