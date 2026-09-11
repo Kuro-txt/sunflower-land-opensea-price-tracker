@@ -558,5 +558,14 @@ document.addEventListener('DOMContentLoaded', () => {
   if (window.lucide) {
     lucide.createIcons();
   }
-  loadData(false);
+
+  // If pre-bundled data is available (GitHub Pages zero-latency mode), render instantly!
+  if (window.INITIAL_COLLECTIBLES_DATA && window.INITIAL_COLLECTIBLES_DATA.items && window.INITIAL_COLLECTIBLES_DATA.items.length > 0) {
+    allItems = window.INITIAL_COLLECTIBLES_DATA.items;
+    totalCountEl.textContent = allItems.length;
+    computeClientStats(allItems, 'GitHub Pages Static Feed', window.INITIAL_COLLECTIBLES_DATA.lastUpdated);
+    applyFiltersAndSort();
+  } else {
+    loadData(false);
+  }
 });
