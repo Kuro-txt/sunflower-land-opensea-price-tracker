@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sunflower Land Collectibles — OpenSea Price Tracker</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22%20%220%22%20%22100%22%20%22100%22><text y=%22.9em%22 font-size=%2290%22>🌻</text></svg>">
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            sfl: {
+              gold: '#F59E0B',
+              sun: '#FBBF24',
+              soil: '#1E293B',
+              leaf: '#10B981',
+              dark: '#0F172A',
+              card: '#1E293B',
+              border: '#334155'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col antialiased selection:bg-amber-500 selection:text-slate-950">
+
+  <!-- Top Announcement Bar -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400 to-emerald-500 flex items-center justify-center shadow-lg shadow-amber-500/20 text-xl font-bold">
+          🌻
+        </div>
+        <div>
+          <div class="flex items-center space-x-2">
+            <h1 class="font-bold text-lg text-white tracking-tight">Sunflower Land</h1>
+            <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Collectibles</span>
+          </div>
+          <p class="text-xs text-slate-400">OpenSea Real-time Price Tracker</p>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-3">
+        <!-- OpenSea Collection Link -->
+        <a href="https://opensea.io/collection/sunflower-land-collectibles" target="_blank" rel="noopener noreferrer" 
+           class="hidden sm:inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600/10 text-blue-400 border border-blue-500/30 hover:bg-blue-600/20 transition">
+          <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+          <span>OpenSea Collection</span>
+        </a>
+
+        <!-- Settings Button -->
+        <button id="openSettingsBtn" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition" title="API Settings">
+          <i data-lucide="settings" class="w-4 h-4"></i>
+        </button>
+
+        <!-- Refresh Button -->
+        <button id="refreshBtn" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md shadow-amber-500/20 transition active:scale-95">
+          <i data-lucide="refresh-cw" id="refreshIcon" class="w-3.5 h-3.5"></i>
+          <span>Refresh</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    
+    <!-- Stats Banner -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- Floor Price -->
+      <div class="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-5 relative overflow-hidden group hover:border-amber-500/40 transition">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider mb-2">
+          <span>Collection Floor</span>
+          <span class="p-1.5 rounded-lg bg-amber-500/10 text-amber-400">
+            <i data-lucide="trending-up" class="w-4 h-4"></i>
+          </span>
+        </div>
+        <div class="flex items-baseline space-x-2">
+          <span id="statFloor" class="text-3xl font-extrabold text-white tracking-tight">--</span>
+          <span class="text-xs font-bold text-amber-400">POL / MATIC</span>
+        </div>
+        <p class="text-[11px] text-slate-500 mt-2 flex items-center space-x-1">
+          <span>Cheapest listed item</span>
+        </p>
+      </div>
+
+      <!-- Total Items -->
+      <div class="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-5 relative overflow-hidden group hover:border-emerald-500/40 transition">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider mb-2">
+          <span>Tracked Collectibles</span>
+          <span class="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400">
+            <i data-lucide="layers" class="w-4 h-4"></i>
+          </span>
+        </div>
+        <div class="flex items-baseline space-x-2">
+          <span id="statTotalItems" class="text-3xl font-extrabold text-white tracking-tight">--</span>
+          <span class="text-xs font-medium text-slate-400">unique items</span>
+        </div>
+        <p class="text-[11px] text-slate-500 mt-2">
+          <span id="statBoostCount">--</span> with in-game utility boost
+        </p>
+      </div>
+
+      <!-- Median Price -->
+      <div class="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-5 relative overflow-hidden group hover:border-blue-500/40 transition">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider mb-2">
+          <span>Median Price</span>
+          <span class="p-1.5 rounded-lg bg-blue-500/10 text-blue-400">
+            <i data-lucide="bar-chart-2" class="w-4 h-4"></i>
+          </span>
+        </div>
+        <div class="flex items-baseline space-x-2">
+          <span id="statMedian" class="text-3xl font-extrabold text-white tracking-tight">--</span>
+          <span class="text-xs font-bold text-blue-400">POL</span>
+        </div>
+        <p class="text-[11px] text-slate-500 mt-2">
+          Average: <span id="statAvg">--</span> POL
+        </p>
+      </div>
+
+      <!-- Data Source / Status -->
+      <div class="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-5 relative overflow-hidden group hover:border-purple-500/40 transition">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider mb-2">
+          <span>Data Provider</span>
+          <span class="p-1.5 rounded-lg bg-purple-500/10 text-purple-400">
+            <i data-lucide="activity" class="w-4 h-4"></i>
+          </span>
+        </div>
+        <div class="flex items-center space-x-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span id="statProvider" class="text-sm font-bold text-white truncate">Connected</span>
+        </div>
+        <p class="text-[11px] text-slate-500 mt-2 truncate">
+          Updated: <span id="statLastUpdated">Just now</span>
+        </p>
+      </div>
+    </div>
+
+    <!-- Filter & Search Toolbar -->
+    <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <!-- Search -->
+        <div class="relative flex-1">
+          <i data-lucide="search" class="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"></i>
+          <input 
+            type="text" 
+            id="searchInput" 
+            placeholder="Search by collectible name or Token ID (e.g. Bear, Chicken, 1210)..." 
+            class="w-full pl-10 pr-10 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 transition"
+          />
+          <button id="clearSearchBtn" class="hidden absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
+            <i data-lucide="x" class="w-4 h-4"></i>
+          </button>
+        </div>
+
+        <!-- Sort & View Controls -->
+        <div class="flex items-center space-x-3">
+          <!-- Sort Dropdown -->
+          <div class="relative">
+            <select id="sortSelect" class="appearance-none bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 pr-8 text-xs font-medium text-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500/50 cursor-pointer">
+              <option value="price_asc">Price: Low to High</option>
+              <option value="price_desc">Price: High to Low</option>
+              <option value="last_sale_desc">Last Sale: Highest</option>
+              <option value="supply_desc">Supply: Most Common</option>
+              <option value="supply_asc">Supply: Most Rare</option>
+              <option value="name_asc">Name: A to Z</option>
+            </select>
+            <i data-lucide="chevron-down" class="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
+          </div>
+
+          <!-- View Mode Toggle -->
+          <div class="flex items-center bg-slate-950 border border-slate-800 rounded-xl p-1">
+            <button id="viewGridBtn" class="p-1.5 rounded-lg bg-slate-800 text-amber-400 transition" title="Grid View">
+              <i data-lucide="grid" class="w-4 h-4"></i>
+            </button>
+            <button id="viewTableBtn" class="p-1.5 rounded-lg text-slate-400 hover:text-white transition" title="Table View">
+              <i data-lucide="list" class="w-4 h-4"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Category Filter Pills -->
+      <div class="flex items-center gap-2 overflow-x-auto pb-1 text-xs no-scrollbar">
+        <span class="text-slate-500 font-medium whitespace-nowrap mr-1">Filter:</span>
+        <button data-filter="all" class="filter-pill active">All Items</button>
+        <button data-filter="boost" class="filter-pill">⚡ With Boosts</button>
+        <button data-filter="cosmetic" class="filter-pill">🎨 Cosmetic Only</button>
+        <button data-filter="tier-cheap" class="filter-pill">🪙 &lt; 1 POL</button>
+        <button data-filter="tier-mid" class="filter-pill">💎 1 – 10 POL</button>
+        <button data-filter="tier-high" class="filter-pill">👑 &gt; 10 POL</button>
+      </div>
+    </div>
+
+    <!-- Items Section Header -->
+    <div class="flex items-center justify-between text-xs text-slate-400 px-1">
+      <div>
+        Showing <span id="filteredCount" class="font-bold text-white">0</span> of <span id="totalCount" class="font-bold text-white">0</span> items
+      </div>
+      <div class="flex items-center space-x-2">
+        <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+        <span>Prices listed in POL (Polygon)</span>
+      </div>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loadingState" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+      <!-- Skeletons will be injected here -->
+    </div>
+
+    <!-- Error State -->
+    <div id="errorState" class="hidden bg-red-500/10 border border-red-500/30 rounded-2xl p-8 text-center space-y-3">
+      <i data-lucide="alert-triangle" class="w-10 h-10 text-red-400 mx-auto"></i>
+      <h3 class="text-lg font-bold text-red-200">Unable to load prices</h3>
+      <p id="errorMessage" class="text-sm text-red-300 max-w-md mx-auto">An error occurred while connecting to the price feed.</p>
+      <button onclick="loadData(true)" class="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-medium text-xs transition">Try Again</button>
+    </div>
+
+    <!-- Grid View Container -->
+    <div id="itemsGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+      <!-- Cards rendered here via JS -->
+    </div>
+
+    <!-- Table View Container -->
+    <div id="itemsTableContainer" class="hidden bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs text-slate-300">
+          <thead class="bg-slate-950/80 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800">
+            <tr>
+              <th scope="col" class="py-3.5 px-4 font-semibold">ID</th>
+              <th scope="col" class="py-3.5 px-4 font-semibold">Collectible</th>
+              <th scope="col" class="py-3.5 px-4 font-semibold">Utility Boost</th>
+              <th scope="col" class="py-3.5 px-4 font-semibold text-right">Floor Price</th>
+              <th scope="col" class="py-3.5 px-4 font-semibold text-right">Last Sale</th>
+              <th scope="col" class="py-3.5 px-4 font-semibold text-right">Supply</th>
+              <th scope="col" class="py-3.5 px-4 font-semibold text-center">OpenSea</th>
+            </tr>
+          </thead>
+          <tbody id="itemsTableBody" class="divide-y divide-slate-800/60">
+            <!-- Table rows rendered here -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Empty State -->
+    <div id="emptyState" class="hidden py-16 text-center space-y-3">
+      <div class="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mx-auto text-slate-500 text-2xl">
+        🔍
+      </div>
+      <h3 class="text-base font-bold text-white">No collectibles found</h3>
+      <p class="text-xs text-slate-400 max-w-sm mx-auto">No items match your search or filter criteria. Try adjusting your query or resetting filters.</p>
+      <button id="resetFiltersBtn" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition">Reset Filters</button>
+    </div>
+
+  </main>
+
+  <!-- Settings Modal -->
+  <div id="settingsModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center space-x-2.5">
+          <i data-lucide="settings" class="w-5 h-5 text-amber-400"></i>
+          <h3 class="text-base font-bold text-white">API & Configuration</h3>
+        </div>
+        <button id="closeSettingsBtn" class="text-slate-400 hover:text-white">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <div class="space-y-4 text-xs">
+        <div>
+          <label class="block font-medium text-slate-300 mb-1.5">Optional OpenSea API Key</label>
+          <input 
+            type="password" 
+            id="openseaApiKeyInput" 
+            placeholder="Enter OpenSea API key (optional)..."
+            class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-600 focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 outline-none"
+          />
+          <p class="text-[11px] text-slate-400 mt-1.5">
+            By default, live prices are fetched via the real-time Polygon market aggregator with zero key required. Enter a key if you wish to query the OpenSea API v2 directly.
+          </p>
+        </div>
+
+        <div class="bg-slate-950/60 rounded-xl p-3 border border-slate-800/80 space-y-1.5 text-slate-400 text-[11px]">
+          <div class="flex justify-between">
+            <span>Collection:</span>
+            <span class="text-slate-200 font-mono">sunflower-land-collectibles</span>
+          </div>
+          <div class="flex justify-between">
+            <span>Contract:</span>
+            <span class="text-slate-200 font-mono">0x22d5...d742 (Polygon)</span>
+          </div>
+          <div class="flex justify-between">
+            <span>Cache TTL:</span>
+            <span class="text-slate-200">60 seconds</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex justify-end space-x-3 pt-2">
+        <button id="cancelSettingsBtn" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium text-xs transition">Cancel</button>
+        <button id="saveSettingsBtn" class="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs transition">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-500">
+    <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+      <p>Data sourced from OpenSea & Polygon Marketplace • Sunflower Land Collectibles</p>
+      <div class="flex items-center space-x-4">
+        <a href="https://opensea.io/collection/sunflower-land-collectibles" target="_blank" class="hover:text-amber-400 transition">OpenSea</a>
+        <a href="https://polygonscan.com/token/0x22d5f9b7337a28424268307d08405d4f4cd4d742" target="_blank" class="hover:text-amber-400 transition">PolygonScan</a>
+        <a href="https://sunflower-land.com" target="_blank" class="hover:text-amber-400 transition">Sunflower Land</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
