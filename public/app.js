@@ -1,4 +1,5 @@
 // Sunflower Land OpenSea Price Tracker Client Application
+// Supports both Static GitHub Pages and Node.js Server environments
 
 let allItems = [];
 let filteredItems = [];
@@ -7,6 +8,7 @@ let currentSearch = '';
 let currentSort = 'price_asc';
 let currentView = 'grid'; // 'grid' or 'table'
 let isLoading = false;
+let customApiKey = localStorage.getItem('opensea_api_key') || '';
 
 // DOM Elements
 const itemsGrid = document.getElementById('itemsGrid');
@@ -71,7 +73,6 @@ function showLoading(show) {
     emptyState.classList.add('hidden');
     errorState.classList.add('hidden');
 
-    // Generate 8 skeleton cards
     loadingState.innerHTML = Array(8).fill(0).map(() => `
       <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 animate-pulse space-y-3">
         <div class="flex justify-between items-center">
@@ -93,47 +94,146 @@ function showLoading(show) {
 }
 
 /**
- * Fetch stats from backend
+ * Compute stats on client side from items array
+ */
+function computeClientStats(items, provider = 'GitHub Pages Data', lastUpdated = new Date()) {
+  const prices = items.map(i => i.floorPrice).filter(p => p > 0);
+  const minPrice = prices.length ? Math.min(...prices) : 0;
+  const maxPrice = prices.length ? Math.max(...prices) : 0;
+  const avgPrice = prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : 0;
+  const sortedPrices = [...prices].sort((a, b) => a - b);
+  const medianPrice = sortedPrices.length ? sortedPrices[Math.floor(sortedPrices.length / 2)] : 0;
+  const boostCount = items.filter(i => i.haveBoost).length;
+
+  statFloor.textContent = formatNumber(minPrice, 3);
+  statTotalItems.textContent = items.length;
+  statBoostCount.textContent = boostCount;
+  statMedian.textContent = formatNumber(medianPrice, 2);
+  statAvg.textContent = formatNumber(avgPrice, 2);
+  statProvider.textContent = provider;
+
+  const time = new Date(lastUpdated);
+  statLastUpdated.textContent = isNaN(time.getTime()) ? 'Just now' : time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * Fetch stats from backend if running with server, otherwise compute client-side
  */
 async function loadStats() {
   try {
     const res = await fetch('/api/stats');
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data.success) {
-      statFloor.textContent = formatNumber(data.collectionFloor, 3);
-      statTotalItems.textContent = data.totalTrackedItems;
-      statBoostCount.textContent = data.boostItemsCount;
-      statMedian.textContent = formatNumber(data.medianPrice, 2);
-      statAvg.textContent = formatNumber(data.averagePrice, 2);
-      statProvider.textContent = data.provider || 'Live Market';
-      
-      const time = new Date(data.lastUpdated);
-      statLastUpdated.textContent = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success) {
+        statFloor.textContent = formatNumber(data.collectionFloor, 3);
+        statTotalItems.textContent = data.totalTrackedItems;
+        statBoostCount.textContent = data.boostItemsCount;
+        statMedian.textContent = formatNumber(data.medianPrice, 2);
+        statAvg.textContent = formatNumber(data.averagePrice, 2);
+        statProvider.textContent = data.provider || 'Live Market';
+        const time = new Date(data.lastUpdated);
+        statLastUpdated.textContent = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return;
+      }
     }
-  } catch (err) {
-    console.warn('Failed to load stats:', err);
+  } catch {
+    // Backend not available (running statically on GitHub Pages)
   }
+  computeClientStats(allItems);
 }
 
 /**
- * Fetch items price data
+ * Smart data fetcher:
+ * 1. Tries local backend `/api/prices` if running on Node server.
+ * 2. If static (GitHub Pages): loads `./data/prices.json`.
+ * 3. On explicit refresh: also tries live market feed / CORS proxy.
  */
 async function loadData(forceRefresh = false) {
   showLoading(true);
   try {
-    const url = `/api/prices${forceRefresh ? '?refresh=true' : ''}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    const data = await res.json();
+    let loaded = false;
+    let data = null;
 
-    if (!data.success) throw new Error(data.error || 'Failed to fetch items');
+    // 1. Try local server API first
+    try {
+      const url = `/api/prices${forceRefresh ? '?refresh=true' : ''}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        data = await res.json();
+        if (data && data.success && data.items) {
+          loaded = true;
+          allItems = data.items;
+          statProvider.textContent = data.provider || 'Live API Server';
+        }
+      }
+    } catch {
+      // Local backend not present, running on static GitHub Pages
+    }
 
-    allItems = data.items || [];
+    // 2. If running statically on GitHub Pages or force refresh:
+    if (!loaded) {
+      // If user has set an OpenSea API Key and clicked refresh, try OpenSea v2 via CORS proxy
+      if (forceRefresh && customApiKey) {
+        try {
+          const targetUrl = encodeURIComponent('https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/best?limit=100');
+          const proxyRes = await fetch(`https://api.allorigins.win/raw?url=${targetUrl}`, {
+            headers: { 'x-api-key': customApiKey }
+          });
+          if (proxyRes.ok) {
+            const osData = await proxyRes.json();
+            if (osData && osData.listings) {
+              const CONTRACT = '0x22d5f9b7337a28424268307d08405d4f4cd4d742';
+              allItems = osData.listings.map(l => {
+                const priceVal = l.price?.current ? parseFloat(l.price.current.value) / Math.pow(10, l.price.current.decimals || 18) : 0;
+                const id = l.protocol_data?.parameters?.offer?.[0]?.identifierOrCriteria || '0';
+                return {
+                  id: parseInt(id, 10) || id,
+                  name: `Sunflower Land #${id}`,
+                  floorPrice: priceVal,
+                  lastSalePrice: 0,
+                  supply: 1,
+                  haveBoost: false,
+                  boostText: '',
+                  openseaUrl: `https://opensea.io/assets/matic/${CONTRACT}/${id}`
+                };
+              });
+              loaded = true;
+              computeClientStats(allItems, 'OpenSea v2 API (Direct)');
+            }
+          }
+        } catch (e) {
+          console.warn('Direct OpenSea proxy failed, falling back to static snapshot:', e);
+        }
+      }
+
+      // Load static data/prices.json
+      if (!loaded) {
+        const pathsToTry = ['./data/prices.json', 'data/prices.json', '/data/prices.json'];
+        for (const p of pathsToTry) {
+          try {
+            const res = await fetch(p + '?v=' + Date.now());
+            if (res.ok) {
+              data = await res.json();
+              if (data && data.items) {
+                allItems = data.items;
+                loaded = true;
+                computeClientStats(allItems, data.provider || 'GitHub Pages Feed', data.lastUpdated);
+                break;
+              }
+            }
+          } catch {
+            // try next path
+          }
+        }
+      }
+    }
+
+    if (!loaded || !allItems.length) {
+      throw new Error('Unable to load collectibles data. Check internet connection or CORS settings.');
+    }
+
     totalCountEl.textContent = allItems.length;
-
     applyFiltersAndSort();
-    loadStats();
   } catch (err) {
     console.error('Error loading data:', err);
     errorState.classList.remove('hidden');
@@ -216,7 +316,6 @@ function renderItems() {
     renderTableView();
   }
 
-  // Reinitialize lucide icons
   if (window.lucide) {
     lucide.createIcons();
   }
@@ -411,6 +510,7 @@ resetFiltersBtn.addEventListener('click', () => {
 
 // Settings Modal
 openSettingsBtn.addEventListener('click', () => {
+  openseaApiKeyInput.value = customApiKey;
   settingsModal.classList.remove('hidden');
 });
 
@@ -424,20 +524,22 @@ cancelSettingsBtn.addEventListener('click', () => {
 
 saveSettingsBtn.addEventListener('click', async () => {
   const apiKey = openseaApiKeyInput.value.trim();
+  customApiKey = apiKey;
+  localStorage.setItem('opensea_api_key', apiKey);
+
+  // Also notify local server if available
   try {
-    const res = await fetch('/api/settings', {
+    await fetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ apiKey })
     });
-    const result = await res.json();
-    if (result.success) {
-      settingsModal.classList.add('hidden');
-      loadData(true);
-    }
-  } catch (err) {
-    alert('Failed to save settings: ' + err.message);
+  } catch {
+    // static mode
   }
+
+  settingsModal.classList.add('hidden');
+  loadData(true);
 });
 
 // Keyboard shortcuts
