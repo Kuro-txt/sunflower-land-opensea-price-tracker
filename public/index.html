@@ -79,17 +79,17 @@
       <!-- Floor Price -->
       <div class="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-5 relative overflow-hidden group hover:border-amber-500/40 transition">
         <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider mb-2">
-          <span>Collection Floor</span>
+          <span>OpenSea Floor</span>
           <span class="p-1.5 rounded-lg bg-amber-500/10 text-amber-400">
             <i data-lucide="trending-up" class="w-4 h-4"></i>
           </span>
         </div>
         <div class="flex items-baseline space-x-2">
           <span id="statFloor" class="text-3xl font-extrabold text-white tracking-tight">--</span>
-          <span class="text-xs font-bold text-amber-400">POL / MATIC</span>
+          <span class="text-xs font-bold text-blue-400">WETH</span>
         </div>
         <p class="text-[11px] text-slate-500 mt-2 flex items-center space-x-1">
-          <span>Cheapest listed item</span>
+          <span>Lowest active OpenSea listing</span>
         </p>
       </div>
 
@@ -103,7 +103,7 @@
         </div>
         <div class="flex items-baseline space-x-2">
           <span id="statTotalItems" class="text-3xl font-extrabold text-white tracking-tight">--</span>
-          <span class="text-xs font-medium text-slate-400">unique items</span>
+          <span class="text-xs font-medium text-slate-400">collectibles</span>
         </div>
         <p class="text-[11px] text-slate-500 mt-2">
           <span id="statBoostCount">--</span> with in-game utility boost
@@ -120,10 +120,10 @@
         </div>
         <div class="flex items-baseline space-x-2">
           <span id="statMedian" class="text-3xl font-extrabold text-white tracking-tight">--</span>
-          <span class="text-xs font-bold text-blue-400">POL</span>
+          <span class="text-xs font-bold text-blue-400">WETH</span>
         </div>
         <p class="text-[11px] text-slate-500 mt-2">
-          Average: <span id="statAvg">--</span> POL
+          Average: <span id="statAvg">--</span> WETH
         </p>
       </div>
 
@@ -195,9 +195,10 @@
         <button data-filter="all" class="filter-pill active">All Items</button>
         <button data-filter="boost" class="filter-pill">⚡ With Boosts</button>
         <button data-filter="cosmetic" class="filter-pill">🎨 Cosmetic Only</button>
-        <button data-filter="tier-cheap" class="filter-pill">🪙 &lt; 1 POL</button>
-        <button data-filter="tier-mid" class="filter-pill">💎 1 – 10 POL</button>
-        <button data-filter="tier-high" class="filter-pill">👑 &gt; 10 POL</button>
+        <button data-filter="tier-cheap" class="filter-pill">🪙 &lt; 0.0005 WETH</button>
+        <button data-filter="tier-mid" class="filter-pill">💎 0.0005 – 0.005 WETH</button>
+        <button data-filter="tier-high" class="filter-pill">👑 &gt; 0.005 WETH</button>
+        <button data-filter="unlisted" class="filter-pill">🚫 Unlisted</button>
       </div>
     </div>
 
@@ -207,14 +208,13 @@
         Showing <span id="filteredCount" class="font-bold text-white">0</span> of <span id="totalCount" class="font-bold text-white">0</span> items
       </div>
       <div class="flex items-center space-x-2">
-        <span class="w-2 h-2 rounded-full bg-amber-400"></span>
-        <span>Prices listed in POL (Polygon)</span>
+        <span class="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>
+        <span>Prices in WETH from OpenSea Official API</span>
       </div>
     </div>
 
     <!-- Loading State -->
     <div id="loadingState" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-      <!-- Skeletons will be injected here -->
     </div>
 
     <!-- Error State -->
@@ -227,7 +227,6 @@
 
     <!-- Grid View Container -->
     <div id="itemsGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-      <!-- Cards rendered here via JS -->
     </div>
 
     <!-- Table View Container -->
@@ -246,7 +245,6 @@
             </tr>
           </thead>
           <tbody id="itemsTableBody" class="divide-y divide-slate-800/60">
-            <!-- Table rows rendered here -->
           </tbody>
         </table>
       </div>
@@ -287,7 +285,7 @@
             class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-600 focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 outline-none"
           />
           <p class="text-[11px] text-slate-400 mt-1.5">
-            By default, live prices are fetched via the real-time Polygon market aggregator with zero key required. Enter a key if you wish to query the OpenSea API v2 directly.
+            By default, live prices are served seamlessly via the GitHub Pages static data feed. If you have an OpenSea API key, save it here to query OpenSea API v2 directly.
           </p>
         </div>
 
@@ -301,8 +299,8 @@
             <span class="text-slate-200 font-mono">0x22d5...d742 (Polygon)</span>
           </div>
           <div class="flex justify-between">
-            <span>Cache TTL:</span>
-            <span class="text-slate-200">60 seconds</span>
+            <span>Hosting:</span>
+            <span class="text-emerald-400">GitHub Pages</span>
           </div>
         </div>
       </div>
