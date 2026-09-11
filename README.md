@@ -1,17 +1,40 @@
 # 🌻 Sunflower Land Collectibles — OpenSea Price Tracker
 
-A real-time web application and dashboard that fetches and tracks item prices for the official [Sunflower Land Collectibles](https://opensea.io/collection/sunflower-land-collectibles) collection on OpenSea (Polygon network).
+A real-time web application and dashboard to fetch, track, and analyze all item prices for the official [Sunflower Land Collectibles](https://opensea.io/collection/sunflower-land-collectibles) collection on OpenSea (Polygon network).
 
-![Sunflower Land Tracker](https://img.shields.io/badge/OpenSea-Collection-blue?logo=opensea)
+👉 **Live GitHub Pages Site**: [https://kuro-txt.github.io/sunflower-land-opensea-price-tracker/](https://kuro-txt.github.io/sunflower-land-opensea-price-tracker/)
+
+![OpenSea](https://img.shields.io/badge/OpenSea-Collection-blue?logo=opensea)
 ![Polygon](https://img.shields.io/badge/Network-Polygon-8247E5?logo=polygon)
+![Hosting](https://img.shields.io/badge/Hosted%20On-GitHub%20Pages-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-green)
+
+---
+
+## ⚡ Can we fetch prices directly from OpenSea by API?
+
+**Yes, and here is how it is engineered:**
+
+### 1. The Browser CORS Restriction
+OpenSea's official REST API v2 (`api.opensea.io`) requires an `X-API-KEY`. If client-side JavaScript in a browser attempts to query `api.opensea.io` directly:
+- **CORS blocks it**: OpenSea does not provide `Access-Control-Allow-Origin: *` for public browser origins.
+- **Security risk**: Exposing your private OpenSea API key in frontend code on a public static site would leak your credentials.
+
+### 2. The Solution: Multi-Tiered Architecture
+
+| Tier | How it Works | Benefits |
+|---|---|---|
+| **Tier 1: GitHub Pages Static Feed** | Pre-generated `data/prices.json` committed to the repository. | Instant loading (<50ms), 100% reliable, zero CORS issues, zero API key required. |
+| **Tier 2: Automated GitHub Actions Cron** | Runs `.github/workflows/update-prices.yml` in the cloud on a schedule. | Automatically queries the API with your repository secret `OPENSEA_API_KEY` and updates `data/prices.json` automatically without exposing your key. |
+| **Tier 3: Client-side Proxy Refresh** | When users click "Refresh" or provide an OpenSea API Key in the UI settings modal, requests route via a CORS proxy. | Live on-demand updates directly from the browser. |
+| **Tier 4: Dedicated Node.js Backend** | Run `npm start` locally or deploy to Render / Railway / Vercel. | Full Express API proxy server with built-in in-memory caching. |
 
 ---
 
 ## ✨ Features
 
-- **⚡ Real-time Item Prices**: Tracks live floor prices, recent sale prices, and circulating supply for all Sunflower Land collectible items.
-- **🔍 Instant Search & Token ID Lookup**: Search instantly across hundreds of items by item name, ID number, or in-game perks.
+- **⚡ Real-time Item Prices**: Tracks live floor prices, recent sale prices, and circulating supply for all 489 Sunflower Land collectible items.
+- **🔍 Instant Search & Token ID Lookup**: Search instantly across all items by name, ID number, or in-game utility perks.
 - **🏷️ Utility Boost Badges**: Distinguishes items with active gameplay boosts (e.g. `+0.1 Stone`, `+20% Carrot`, `+1 Fishing minigame attempt`) from cosmetic items.
 - **📊 Collection Market Metrics**: Real-time stats bar showing collection floor, median price, average price, total supply, and tracked item count.
 - **🎛️ Interactive Filters & Sorting**:
@@ -21,133 +44,46 @@ A real-time web application and dashboard that fetches and tracks item prices fo
   - **Grid View**: Clean visual cards with pricing badges and direct buy links.
   - **Table View**: High-density financial overview.
 - **🔗 Direct OpenSea Integration**: 1-click links straight to each item's buy/listing page on OpenSea.
-- **🔄 Dual Data Provider Support**:
-  - **Zero-Setup Live Market Aggregator**: Works 100% out of the box with no API key needed.
-  - **Direct OpenSea v2 API**: Enter an optional OpenSea API Key anytime via the UI settings modal or `.env`.
-- **⚡ Built-in In-Memory Cache**: 60-second TTL caching layer prevents API rate limiting and provides sub-millisecond response times.
 
 ---
 
-## 🚀 Quick Start
+## 🌐 Live GitHub Pages Deployment
 
-### Prerequisites
-- [Node.js](https://nodejs.org/) (v16 or higher)
-- npm or yarn
+The static web application is deployed on GitHub Pages:
+**[https://kuro-txt.github.io/sunflower-land-opensea-price-tracker/](https://kuro-txt.github.io/sunflower-land-opensea-price-tracker/)**
 
-### 1. Clone & Install Dependencies
+### Setting up Automatic Price Updates via GitHub Actions:
+1. Go to your repository **Settings** → **Secrets and variables** → **Actions**.
+2. Add a new repository secret:
+   - **Name**: `OPENSEA_API_KEY`
+   - **Value**: `your_opensea_api_key_here`
+3. The workflow `.github/workflows/update-prices.yml` will automatically query the OpenSea API and commit fresh prices every 4 hours, or you can trigger it manually under the **Actions** tab anytime!
+
+---
+
+## 💻 Local Development
+
+### 1. Clone the Repository
 ```bash
-git clone https://github.com/<your-username>/sunflower-land-opensea-price-tracker.git
+git clone https://github.com/Kuro-txt/sunflower-land-opensea-price-tracker.git
 cd sunflower-land-opensea-price-tracker
 npm install
 ```
 
 ### 2. Configure Environment (Optional)
-Copy `.env.example` to `.env` if you wish to customize port or add an OpenSea API key:
 ```bash
 cp .env.example .env
 ```
 
-### 3. Run the Server
+### 3. Run the Development Server
 ```bash
 npm start
 ```
-
-Open your browser and navigate to:
-```
-http://localhost:3000
-```
+Open **[http://localhost:3000](http://localhost:3000)** in your browser.
 
 ---
 
-## 📡 REST API Reference
-
-The backend provides clean JSON endpoints for programmatic access:
-
-### `GET /api/prices`
-Returns all collectible items with their latest prices.
-- **Query Parameters**:
-  - `refresh=true`: Force bypass cache and fetch fresh data.
-  - `search=bear`: Filter by item name or ID.
-  - `boost=true|false`: Filter by boost perk availability.
-  - `minPrice=1&maxPrice=10`: Price range filters.
-  - `sort=price_asc|price_desc|last_sale_desc|supply_asc|supply_desc|name_asc`: Sorting.
-
-#### Example Response:
-```json
-{
-  "success": true,
-  "collection": {
-    "name": "Sunflower Land Collectibles",
-    "slug": "sunflower-land-collectibles",
-    "contract": "0x22d5f9b7337a28424268307d08405d4f4cd4d742",
-    "openseaUrl": "https://opensea.io/collection/sunflower-land-collectibles",
-    "chain": "polygon"
-  },
-  "cached": true,
-  "lastUpdated": "2026-09-11T09:20:00.000Z",
-  "totalItems": 184,
-  "items": [
-    {
-      "id": 1210,
-      "name": "Brilliant Bear",
-      "floorPrice": 0.05,
-      "lastSalePrice": 0.0025,
-      "supply": 27264,
-      "haveBoost": false,
-      "boostText": "",
-      "openseaUrl": "https://opensea.io/assets/matic/0x22d5f9b7337a28424268307d08405d4f4cd4d742/1210"
-    }
-  ]
-}
-```
-
-### `GET /api/stats`
-Returns aggregated statistics for the collection:
-```json
-{
-  "success": true,
-  "collectionSlug": "sunflower-land-collectibles",
-  "totalTrackedItems": 184,
-  "collectionFloor": 0.05,
-  "maxPrice": 79.8999,
-  "averagePrice": 12.34,
-  "medianPrice": 4.15,
-  "boostItemsCount": 82,
-  "totalSupply": 542100
-}
-```
-
-### `POST /api/settings`
-Update or test OpenSea API key at runtime:
-```json
-{
-  "apiKey": "your_opensea_api_key_here"
-}
-```
-
----
-
-## 🛠️ Project Structure
-
-```
-sunflower-land-tracker/
-├── public/
-│   ├── index.html         # Main dashboard HTML
-│   ├── styles.css         # Custom animations & theme styles
-│   └── app.js             # Client search, filter, and rendering logic
-├── scripts/
-│   └── create-github-repo.js # GitHub repository publisher script
-├── .env.example           # Environment template
-├── .gitignore             # Git ignore rules
-├── package.json           # Dependencies and scripts
-├── README.md              # Project documentation
-└── server.js              # Express backend & API proxy
-```
-
----
-
-## 📜 Contract Information
-
+## 📜 Contract Details
 - **Contract Address**: `0x22d5f9b7337a28424268307d08405d4f4cd4d742`
 - **Network**: Polygon (Matic)
 - **Token Standard**: ERC-1155 Multi-Token Standard
