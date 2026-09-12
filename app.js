@@ -646,9 +646,9 @@ function renderGridView() {
     const openSeaSfl = (isListed && flowerUsdcRate > 0) ? (((item.rawPrice || item.floorPrice) * ethUsdPrice) / flowerUsdcRate) : 0;
     // In-Game price after 10% fee
     const inGameNetSfl = hasInGame ? (item.inGameFloor * 0.9) : 0;
-    // Difference = In-Game Equiv - After -10% Fee
+    // Difference = In-Game (After -10% Fee) - OpenSea In-Game Equiv
     const hasDiff = isListed && hasInGame && openSeaSfl > 0 && inGameNetSfl > 0;
-    const diffSfl = hasDiff ? (openSeaSfl - inGameNetSfl) : null;
+    const diffSfl = hasDiff ? (inGameNetSfl - openSeaSfl) : null;
     const diffUsdc = (diffSfl !== null && flowerUsdcRate > 0) ? (diffSfl * flowerUsdcRate) : null;
 
     let diffBadge = '';
@@ -665,7 +665,7 @@ function renderGridView() {
           <div class="flex items-center space-x-1.5">
             <span class="w-1.5 h-1.5 rounded-full ${isPositive ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}"></span>
             <span class="text-[10px] font-bold tracking-wider uppercase text-slate-300">Price Diff</span>
-            <span class="text-[9px] text-slate-500 hidden sm:inline">(OS Equiv − Net Game)</span>
+            <span class="text-[9px] text-slate-500 hidden sm:inline">(Net Game − OS Equiv)</span>
           </div>
           <div class="font-mono font-bold text-xs flex items-baseline space-x-1">
             <span class="${isPositive ? 'text-emerald-400' : 'text-rose-400'}">${sflFormatted}</span>
@@ -843,9 +843,9 @@ function renderTableView() {
     const openSeaSfl = (isListed && flowerUsdcRate > 0) ? (((item.rawPrice || item.floorPrice) * ethUsdPrice) / flowerUsdcRate) : 0;
     // In-Game price after 10% fee
     const inGameNetSfl = hasInGame ? (item.inGameFloor * 0.9) : 0;
-    // Difference = In-Game Equiv - After -10% Fee
+    // Difference = In-Game (After -10% Fee) - OpenSea In-Game Equiv
     const hasDiff = isListed && hasInGame && openSeaSfl > 0 && inGameNetSfl > 0;
-    const diffSfl = hasDiff ? (openSeaSfl - inGameNetSfl) : null;
+    const diffSfl = hasDiff ? (inGameNetSfl - openSeaSfl) : null;
     const diffUsdc = (diffSfl !== null && flowerUsdcRate > 0) ? (diffSfl * flowerUsdcRate) : null;
 
     return `
