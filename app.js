@@ -439,10 +439,11 @@ function applyFiltersAndSort() {
   // 2. Category Filter
   if (currentFilter === 'recently-listed') {
     result = result.filter(item => item.recentlyListed);
-  } else if (currentFilter === 'recently-sold') {
-    result = result.filter(item => item.recentlySold);
-  } else if (currentFilter === 'ingame') {
-    result = result.filter(item => item.inGameFloor && item.inGameFloor > 0);
+    result.sort((a, b) => {
+      const aTime = a.lastListedTimestamp || (a.orderCreatedAt ? a.orderCreatedAt * 1000 : 0);
+      const bTime = b.lastListedTimestamp || (b.orderCreatedAt ? b.orderCreatedAt * 1000 : 0);
+      return bTime - aTime;
+    });
   } else if (currentFilter === 'boost') {
     result = result.filter(item => item.haveBoost);
   } else if (currentFilter === 'cosmetic') {
