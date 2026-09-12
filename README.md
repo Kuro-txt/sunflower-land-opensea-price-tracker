@@ -1,8 +1,8 @@
-# 🌻 Sunflower Land Collectibles — OpenSea Price Tracker
+# 🌻 Sunflower Land Price Tracker (OpenSea & In-Game Marketplace)
 
-A real-time web application and dashboard to fetch, track, and analyze all item prices for the official [Sunflower Land Collectibles](https://opensea.io/collection/sunflower-land-collectibles) collection on OpenSea (Polygon network).
+A high-performance live web dashboard to track, compare, and analyze all item prices across both **OpenSea** (WETH) and the **Sunflower Land In-Game Marketplace** (🌸 FLOWER / SFL converted to USDC).
 
-👉 **Live GitHub Pages Site**: [https://kuro-txt.github.io/sunflower-land-opensea-price-tracker/](https://kuro-txt.github.io/sunflower-land-opensea-price-tracker/)
+👉 **Live Dashboard**: [https://kuro-txt.github.io/sunflower-land-opensea-price-tracker/](https://kuro-txt.github.io/sunflower-land-opensea-price-tracker/)
 
 ![OpenSea](https://img.shields.io/badge/OpenSea-Collection-blue?logo=opensea)
 ![Polygon](https://img.shields.io/badge/Network-Polygon-8247E5?logo=polygon)
@@ -11,81 +11,71 @@ A real-time web application and dashboard to fetch, track, and analyze all item 
 
 ---
 
-## ⚡ Can we fetch prices directly from OpenSea by API?
-
-**Yes, and here is how it is engineered:**
-
-### 1. The Browser CORS Restriction
-OpenSea's official REST API v2 (`api.opensea.io`) requires an `X-API-KEY`. If client-side JavaScript in a browser attempts to query `api.opensea.io` directly:
-- **CORS blocks it**: OpenSea does not provide `Access-Control-Allow-Origin: *` for public browser origins.
-- **Security risk**: Exposing your private OpenSea API key in frontend code on a public static site would leak your credentials.
-
-### 2. The Solution: Multi-Tiered Architecture
-
-| Tier | How it Works | Benefits |
-|---|---|---|
-| **Tier 1: GitHub Pages Static Feed** | Pre-generated `data/prices.json` committed to the repository. | Instant loading (<50ms), 100% reliable, zero CORS issues, zero API key required. |
-| **Tier 2: Automated GitHub Actions Cron** | Runs `.github/workflows/update-prices.yml` in the cloud on a schedule. | Automatically queries the API with your repository secret `OPENSEA_API_KEY` and updates `data/prices.json` automatically without exposing your key. |
-| **Tier 3: Client-side Proxy Refresh** | When users click "Refresh" or provide an OpenSea API Key in the UI settings modal, requests route via a CORS proxy. | Live on-demand updates directly from the browser. |
-| **Tier 4: Dedicated Node.js Backend** | Run `npm start` locally or deploy to Render / Railway / Vercel. | Full Express API proxy server with built-in in-memory caching. |
-
----
-
 ## ✨ Features
 
-- **⚡ Real-time Item Prices**: Tracks live floor prices, recent sale prices, and circulating supply for all 489 Sunflower Land collectible items.
-- **🔍 Instant Search & Token ID Lookup**: Search instantly across all items by name, ID number, or in-game utility perks.
-- **🏷️ Utility Boost Badges**: Distinguishes items with active gameplay boosts (e.g. `+0.1 Stone`, `+20% Carrot`, `+1 Fishing minigame attempt`) from cosmetic items.
-- **📊 Collection Market Metrics**: Real-time stats bar showing collection floor, median price, average price, total supply, and tracked item count.
-- **🎛️ Interactive Filters & Sorting**:
-  - Filter by Category: *All Items*, *With Boosts*, *Cosmetic Only*, *< 1 POL*, *1–10 POL*, *> 10 POL*.
-  - Sort by: *Floor Price (Asc/Desc)*, *Last Sale*, *Supply (Rarity)*, and *Name (A-Z)*.
+- **🌸 Side-by-Side Marketplace Comparison**:
+  - **OpenSea Floor**: Real-time lowest active listing in WETH with estimated USD value.
+  - **In-Game Floor**: Real-time lowest price in Flower Token (SFL) converted to USDC using live exchange rates.
+- **⚡ Recently Listed Filter**:
+  - Direct integration with OpenSea Events API (`event_type=listing`) to surface the newest listings with relative timestamps (e.g. `⚡ Listed (2h ago)`).
+- **🔥 Recently Sold Tracking**:
+  - OpenSea sale events (`event_type=sale`) showing the last transaction price and date.
+- **📋 1,477 Item Official Catalog**:
+  - Mapped directly with Sunflower Land's official game repository (`KNOWN_IDS`) across crops, resources, tools, buildings, collectibles, and wearables.
+- **🔍 Instant Filter & Search**:
+  - Search by official name, numeric ID (e.g. `603` or `#603`), or gameplay perk keyword.
+  - Filter pills: *Recently Listed*, *Recently Sold*, *In-Game Listed*, *With Boosts*, *Cosmetic Only*, and price tier filters.
 - **📱 Dual View Modes**:
-  - **Grid View**: Clean visual cards with pricing badges and direct buy links.
-  - **Table View**: High-density financial overview.
-- **🔗 Direct OpenSea Integration**: 1-click links straight to each item's buy/listing page on OpenSea.
+  - **Grid View**: Clean cards with dual price containers and direct OpenSea buy buttons.
+  - **Table View**: High-density financial table with dedicated in-game floor columns.
 
 ---
 
-## 🌐 Live GitHub Pages Deployment
+## 🏗️ Clean Project Structure
 
-The static web application is deployed on GitHub Pages:
-**[https://kuro-txt.github.io/sunflower-land-opensea-price-tracker/](https://kuro-txt.github.io/sunflower-land-opensea-price-tracker/)**
-
-### Setting up Automatic Price Updates via GitHub Actions:
-1. Go to your repository **Settings** → **Secrets and variables** → **Actions**.
-2. Add a new repository secret:
-   - **Name**: `OPENSEA_API_KEY`
-   - **Value**: `your_opensea_api_key_here`
-3. The workflow `.github/workflows/update-prices.yml` will automatically query the OpenSea API and commit fresh prices every 4 hours, or you can trigger it manually under the **Actions** tab anytime!
+```
+├── index.html                    # Main web dashboard interface
+├── app.js                        # Frontend app logic & real-time client-side price fetchers
+├── styles.css                    # Dashboard styling & Tailwind utilities
+├── data.js                       # Pre-bundled instant loading dataset
+├── data/
+│   ├── prices.json               # Full catalog with floor prices & metadata
+│   ├── exchange.json             # Live SFL/Flower token exchange rate
+│   └── ingame_nfts.json          # SFL In-game marketplace items
+├── scripts/
+│   ├── update-prices.js          # Unified, clean script to fetch fresh OpenSea + In-Game prices
+│   ├── create-github-repo.js     # GitHub publisher and repository synchronizer
+│   └── known_ids.json            # 1,476 item names & metadata from Sunflower Land repo
+├── .github/
+│   └── workflows/
+│       └── update-prices.yml     # Automated GitHub Action to refresh prices on schedule
+├── .env.example                  # Clean configuration template
+├── .gitignore                    # Standard Node.js & local file ignores
+├── .nojekyll                     # GitHub Pages bypass
+├── package.json                  # Minimal dependencies & run scripts
+└── README.md                     # Clean, professional documentation
+```
 
 ---
 
-## 💻 Local Development
+## ⚡ Fetching Fresh Prices
 
-### 1. Clone the Repository
-```bash
-git clone https://github.com/Kuro-txt/sunflower-land-opensea-price-tracker.git
-cd sunflower-land-opensea-price-tracker
-npm install
-```
+### Option 1: Automatic Scheduled Updates (GitHub Actions)
+The repository includes `.github/workflows/update-prices.yml` which automatically fetches fresh prices and commits the latest catalog:
+- **Hourly Cron**: Automatically executes every hour in the cloud.
+- **Manual Trigger**: Navigate to your GitHub repository's **Actions** tab → **Update Collectibles Prices** → click **Run workflow**.
 
-### 2. Configure Environment (Optional)
+### Option 2: Local CLI Update
+To fetch fresh prices from OpenSea and the in-game market manually:
 ```bash
-cp .env.example .env
+npm run update-prices
 ```
-
-### 3. Run the Development Server
-```bash
-npm start
-```
-Open **[http://localhost:3000](http://localhost:3000)** in your browser.
 
 ---
 
 ## 📜 Contract Details
-- **Contract Address**: `0x22d5f9b7337a28424268307d08405d4f4cd4d742`
-- **Network**: Polygon (Matic)
+- **Contract Address**: `0x22d5f9b7337a28424268307d08405d4f4cd4d7422`
+- **Network**: Polygon
 - **Token Standard**: ERC-1155 Multi-Token Standard
 - **OpenSea Collection**: [sunflower-land-collectibles](https://opensea.io/collection/sunflower-land-collectibles)
 
