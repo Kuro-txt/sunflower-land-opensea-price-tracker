@@ -74,7 +74,7 @@ npm run update-prices
 ---
 
 ## 📜 Contract Details
-- **Contract Address**: `0x22d5f9b7337a28424268307d08405d4f4cd4d7422`
+- **Contract Address**: `0x22d5f9b75c524fec1d6619787e582644cd4d7422`
 - **Network**: Polygon
 - **Token Standard**: ERC-1155 Multi-Token Standard
 - **OpenSea Collection**: [sunflower-land-collectibles](https://opensea.io/collection/sunflower-land-collectibles)
