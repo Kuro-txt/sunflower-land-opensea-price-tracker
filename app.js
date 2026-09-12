@@ -625,18 +625,24 @@ function renderGridView() {
               ${usdDisplay ? `<span class="text-[10px] text-slate-500 font-mono mt-0.5">${usdDisplay}</span>` : '<span class="text-[10px] text-slate-600 block mt-0.5">-</span>'}
             </div>
 
-            <!-- In-Game Floor (FLOWER + USDC) -->
+            <!-- In-Game Floor (FLOWER + USDC) with -10% calculation -->
             <div class="bg-slate-950/70 p-2.5 rounded-xl border ${hasInGame ? 'border-pink-500/30 bg-pink-950/10' : 'border-slate-800/60'} flex flex-col justify-between">
               <div>
                 <div class="flex items-center space-x-1 mb-1">
                   <span class="text-[10px]">🌸</span>
                   <span class="text-[10px] ${hasInGame ? 'text-pink-300 font-semibold' : 'text-slate-400 font-semibold'} uppercase tracking-wider">In-Game</span>
                 </div>
-                <div class="text-xs font-black ${hasInGame ? 'text-pink-400' : 'text-slate-500'} tracking-tight">
-                  ${inGamePriceDisplay} ${hasInGame ? `<span class="text-[9px] font-bold text-pink-300/80">SFL</span>` : ''}
+                <div class="text-xs font-black ${hasInGame ? 'text-pink-400' : 'text-slate-500'} tracking-tight flex items-baseline flex-wrap gap-1">
+                  <span>${inGamePriceDisplay} ${hasInGame ? `<span class="text-[9px] font-bold text-pink-300/80">SFL</span>` : ''}</span>
+                  ${hasInGame ? `<span class="text-[10px] font-medium text-slate-400 font-mono" title="Price minus 10% fee">(-10%: <strong class="text-pink-300">${formatFlowerPrice(item.inGameFloor * 0.9)}</strong>)</span>` : ''}
                 </div>
               </div>
-              ${inGameUsdcDisplay ? `<span class="text-[10px] text-emerald-400 font-mono font-medium mt-0.5">${inGameUsdcDisplay}</span>` : '<span class="text-[10px] text-slate-600 block mt-0.5">-</span>'}
+              ${inGameUsdcDisplay ? `
+                <div class="text-[10px] text-emerald-400 font-mono font-medium mt-0.5 leading-tight">
+                  <span>${inGameUsdcDisplay}</span>
+                  <span class="text-slate-500 block text-[9px]">(-10%: ${formatFlowerUsdc(item.inGameFloor * 0.9)})</span>
+                </div>
+              ` : '<span class="text-[10px] text-slate-600 block mt-0.5">-</span>'}
             </div>
           </div>
 
@@ -711,13 +717,14 @@ function renderTableView() {
           </div>
           ${usdDisplay && isListed ? `<span class="text-[10px] text-slate-500 font-mono block">${usdDisplay}</span>` : ''}
         </td>
-        <!-- In-Game Floor (FLOWER + USDC) -->
+        <!-- In-Game Floor (FLOWER + USDC) with -10% calculation -->
         <td class="py-3 px-4 text-right">
           <div>
             <span class="font-extrabold ${hasInGame ? 'text-pink-400' : 'text-slate-500'}">${inGamePriceDisplay}</span>
             ${hasInGame ? `<span class="text-[10px] text-pink-300/80 font-bold ml-0.5">SFL</span>` : ''}
+            ${hasInGame ? `<span class="text-[11px] text-slate-400 font-mono font-medium ml-1.5" title="In-game price minus 10% fee">(-10%: <strong class="text-pink-300">${formatFlowerPrice(item.inGameFloor * 0.9)} SFL</strong>)</span>` : ''}
           </div>
-          ${inGameUsdcDisplay && hasInGame ? `<span class="text-[10px] text-emerald-400 font-mono block font-medium">${inGameUsdcDisplay}</span>` : ''}
+          ${inGameUsdcDisplay && hasInGame ? `<span class="text-[10px] text-emerald-400 font-mono block font-medium">${inGameUsdcDisplay} <span class="text-slate-500 font-normal">(-10%: ${formatFlowerUsdc(item.inGameFloor * 0.9)})</span></span>` : ''}
         </td>
         <!-- Last Sold -->
         <td class="py-3 px-4 text-right">
