@@ -12,7 +12,7 @@ const path = require('path');
 
 const OPENSEA_API_KEY = process.env.OPENSEA_API_KEY || process.argv[2] || 'add815580a904473ba7f162c0ccc4926';
 const COLLECTION_SLUG = 'sunflower-land-collectibles';
-const CONTRACT_ADDRESS = '0x22d5f9b7337a28424268307d08405d4f4cd4d7422';
+const CONTRACT_ADDRESS = '0x22d5f9b75c524fec1d6619787e582644cd4d7422';
 const ROOT_DIR = path.resolve(__dirname, '..');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -314,7 +314,8 @@ async function main() {
       lastListedPrice,
       orderCreatedAt,
       inGameFloor,
-      inGameFloorUsdc
+      inGameFloorUsdc,
+      openseaUrl: `https://opensea.io/assets/polygon/${CONTRACT_ADDRESS}/${numId}`
     });
   }
 
