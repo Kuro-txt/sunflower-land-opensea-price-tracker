@@ -160,19 +160,23 @@ function computeClientStats(items, provider = 'OpenSea + In-Game', lastUpdated =
   const inGameListed = items.filter(i => i.inGameFloor && i.inGameFloor > 0);
   const boostCount = items.filter(i => i.haveBoost).length;
 
-  statFloor.textContent = formatCryptoPrice(minPrice);
+  if (statFloor) {
+    statFloor.textContent = formatCryptoPrice(minPrice);
+  }
   if (statFlowerRate) {
     statFlowerRate.textContent = '$' + (flowerRate || flowerUsdcRate).toFixed(4);
   }
   if (statInGameCount) {
     statInGameCount.textContent = inGameListed.length;
   }
-  statTotalItems.textContent = items.length;
-  statBoostCount.textContent = boostCount;
-  statProvider.textContent = provider;
+  if (statTotalItems) statTotalItems.textContent = items.length;
+  if (statBoostCount) statBoostCount.textContent = boostCount;
+  if (statProvider) statProvider.textContent = provider;
 
   const time = new Date(lastUpdated);
-  statLastUpdated.textContent = isNaN(time.getTime()) ? 'Just now' : time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (statLastUpdated) {
+    statLastUpdated.textContent = isNaN(time.getTime()) ? 'Just now' : time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
 }
 
 /**
@@ -825,46 +829,54 @@ if (resetFiltersBtn) {
 }
 
 // Settings Modal
-openSettingsBtn.addEventListener('click', () => {
-  openseaApiKeyInput.value = customApiKey;
-  settingsModal.classList.remove('hidden');
-});
+if (openSettingsBtn && settingsModal) {
+  openSettingsBtn.addEventListener('click', () => {
+    if (openseaApiKeyInput) openseaApiKeyInput.value = customApiKey;
+    settingsModal.classList.remove('hidden');
+  });
 
-closeSettingsBtn.addEventListener('click', () => {
-  settingsModal.classList.add('hidden');
-});
-
-cancelSettingsBtn.addEventListener('click', () => {
-  settingsModal.classList.add('hidden');
-});
-
-saveSettingsBtn.addEventListener('click', async () => {
-  const apiKey = openseaApiKeyInput.value.trim();
-  customApiKey = apiKey;
-  localStorage.setItem('opensea_api_key', apiKey);
-
-  try {
-    await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiKey })
+  if (closeSettingsBtn) {
+    closeSettingsBtn.addEventListener('click', () => {
+      settingsModal.classList.add('hidden');
     });
-  } catch {
-    // static mode
   }
 
-  settingsModal.classList.add('hidden');
-  loadData(true);
-});
+  if (cancelSettingsBtn) {
+    cancelSettingsBtn.addEventListener('click', () => {
+      settingsModal.classList.add('hidden');
+    });
+  }
+
+  if (saveSettingsBtn) {
+    saveSettingsBtn.addEventListener('click', async () => {
+      const apiKey = openseaApiKeyInput ? openseaApiKeyInput.value.trim() : '';
+      customApiKey = apiKey;
+      localStorage.setItem('opensea_api_key', apiKey);
+
+      try {
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apiKey })
+        });
+      } catch {
+        // static mode
+      }
+
+      settingsModal.classList.add('hidden');
+      loadData(true);
+    });
+  }
+}
 
 // Keyboard shortcuts
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !settingsModal.classList.contains('hidden')) {
+  if (e.key === 'Escape' && settingsModal && !settingsModal.classList.contains('hidden')) {
     settingsModal.classList.add('hidden');
   }
   if (e.key === '/' && document.activeElement !== searchInput) {
     e.preventDefault();
-    searchInput.focus();
+    if (searchInput) searchInput.focus();
   }
 });
 
