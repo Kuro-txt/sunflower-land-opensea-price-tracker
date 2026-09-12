@@ -19,7 +19,7 @@ function savePreference(key, value) {
 }
 
 const ALLOWED_FILTERS = ['all', 'boost', 'without-boost', 'no-boost', 'recently-listed', 'cosmetic'];
-const ALLOWED_SORTS = ['price_asc', 'price_desc', 'ingame_asc', 'ingame_desc', 'recently_listed', 'recently_sold', 'last_sale_desc', 'supply_desc', 'supply_asc', 'name_asc'];
+const ALLOWED_SORTS = ['price_asc', 'price_desc', 'ingame_asc', 'ingame_desc', 'diff_desc', 'recently_listed', 'recently_sold', 'last_sale_desc', 'supply_desc', 'supply_asc', 'name_asc'];
 const ALLOWED_VIEWS = ['grid', 'table'];
 
 let allItems = [];
@@ -529,6 +529,18 @@ function applyFiltersAndSort() {
     });
   } else if (currentSort === 'ingame_desc') {
     result.sort((a, b) => (b.inGameFloor || 0) - (a.inGameFloor || 0));
+  } else if (currentSort === 'diff_desc') {
+    result.sort((a, b) => {
+      const aOS = (!a.unlisted && (a.rawPrice || a.floorPrice)) ? (((a.rawPrice || a.floorPrice) * ethUsdPrice) / (flowerUsdcRate || 1)) : null;
+      const aGame = (a.inGameFloor && a.inGameFloor > 0) ? (a.inGameFloor * 0.9) : null;
+      const aDiff = (aOS !== null && aGame !== null) ? (aOS - aGame) : -999999999;
+
+      const bOS = (!b.unlisted && (b.rawPrice || b.floorPrice)) ? (((b.rawPrice || b.floorPrice) * ethUsdPrice) / (flowerUsdcRate || 1)) : null;
+      const bGame = (b.inGameFloor && b.inGameFloor > 0) ? (b.inGameFloor * 0.9) : null;
+      const bDiff = (bOS !== null && bGame !== null) ? (bOS - bGame) : -999999999;
+
+      return bDiff - aDiff;
+    });
   } else if (currentSort === 'last_sale_desc') {
     result.sort((a, b) => (b.lastSalePrice || 0) - (a.lastSalePrice || 0));
   } else if (currentSort === 'price_asc') {
@@ -630,6 +642,49 @@ function renderGridView() {
         </div>`
       : '';
 
+    // In-Game Equiv (OpenSea price converted to SFL)
+    const openSeaSfl = (isListed && flowerUsdcRate > 0) ? (((item.rawPrice || item.floorPrice) * ethUsdPrice) / flowerUsdcRate) : 0;
+    // In-Game price after 10% fee
+    const inGameNetSfl = hasInGame ? (item.inGameFloor * 0.9) : 0;
+    // Difference = In-Game Equiv - After -10% Fee
+    const hasDiff = isListed && hasInGame && openSeaSfl > 0 && inGameNetSfl > 0;
+    const diffSfl = hasDiff ? (openSeaSfl - inGameNetSfl) : null;
+    const diffUsdc = (diffSfl !== null && flowerUsdcRate > 0) ? (diffSfl * flowerUsdcRate) : null;
+
+    let diffBadge = '';
+    if (hasDiff) {
+      const isPositive = diffSfl >= 0;
+      const sign = isPositive ? '+' : '-';
+      const absSfl = Math.abs(diffSfl);
+      const absUsdc = Math.abs(diffUsdc);
+      const sflFormatted = `${sign}${formatFlowerPrice(absSfl)} SFL`;
+      const usdcFormatted = `(${sign}$${absUsdc < 0.01 ? '<0.01' : absUsdc.toFixed(2)} USDC)`;
+
+      diffBadge = `
+        <div class="flex items-center justify-between px-2.5 py-1.5 rounded-xl ${isPositive ? 'bg-emerald-950/30 border border-emerald-500/25' : 'bg-rose-950/30 border border-rose-500/25'} text-xs">
+          <div class="flex items-center space-x-1.5">
+            <span class="w-1.5 h-1.5 rounded-full ${isPositive ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}"></span>
+            <span class="text-[10px] font-bold tracking-wider uppercase text-slate-300">Price Diff</span>
+            <span class="text-[9px] text-slate-500 hidden sm:inline">(OS Equiv − Net Game)</span>
+          </div>
+          <div class="font-mono font-bold text-xs flex items-baseline space-x-1">
+            <span class="${isPositive ? 'text-emerald-400' : 'text-rose-400'}">${sflFormatted}</span>
+            <span class="text-[10px] text-slate-400 font-normal">${usdcFormatted}</span>
+          </div>
+        </div>
+      `;
+    } else {
+      diffBadge = `
+        <div class="flex items-center justify-between px-2.5 py-1 rounded-xl bg-slate-950/40 border border-slate-800/50 text-[10px] text-slate-500">
+          <div class="flex items-center space-x-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-slate-600"></span>
+            <span class="uppercase tracking-wider font-semibold text-slate-400">Price Diff</span>
+          </div>
+          <span class="font-mono text-[10px]">${!isListed && !hasInGame ? 'Both Unlisted' : (!isListed ? 'OpenSea Unlisted' : 'In-Game Unlisted')}</span>
+        </div>
+      `;
+    }
+
     return `
       <div class="collectible-card bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 flex flex-col justify-between space-y-3 relative group">
         <div>
@@ -654,7 +709,10 @@ function renderGridView() {
         </div>
 
         <!-- Pricing Area: Side-by-side OpenSea vs In-Game -->
-        <div class="space-y-2.5 pt-2 border-t border-slate-800/80">
+        <div class="space-y-2 pt-2 border-t border-slate-800/80">
+          <!-- Price Difference on top of OpenSea and In-Game cards -->
+          ${diffBadge}
+
           <div class="grid grid-cols-2 gap-2">
             <!-- OpenSea Floor -->
             <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 flex flex-col justify-between hover:border-blue-500/40 transition">
@@ -781,6 +839,15 @@ function renderTableView() {
       ? `<span class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30" title="Listed ${listedAgo || 'recently'} on OpenSea">⚡ Listed ${listedAgo ? `(${listedAgo})` : ''}</span>`
       : '';
 
+    // In-Game Equiv (OpenSea price converted to SFL)
+    const openSeaSfl = (isListed && flowerUsdcRate > 0) ? (((item.rawPrice || item.floorPrice) * ethUsdPrice) / flowerUsdcRate) : 0;
+    // In-Game price after 10% fee
+    const inGameNetSfl = hasInGame ? (item.inGameFloor * 0.9) : 0;
+    // Difference = In-Game Equiv - After -10% Fee
+    const hasDiff = isListed && hasInGame && openSeaSfl > 0 && inGameNetSfl > 0;
+    const diffSfl = hasDiff ? (openSeaSfl - inGameNetSfl) : null;
+    const diffUsdc = (diffSfl !== null && flowerUsdcRate > 0) ? (diffSfl * flowerUsdcRate) : null;
+
     return `
       <tr class="hover:bg-slate-800/40 transition">
         <td class="py-3 px-4 font-mono text-slate-400 font-semibold">#${item.id}</td>
@@ -836,6 +903,17 @@ function renderTableView() {
               <span class="text-[10px] text-slate-600 block">-</span>
             </div>
           `}
+        </td>
+        <!-- Difference (SFL) -->
+        <td class="py-3 px-4 text-right">
+          ${hasDiff ? `
+            <div class="font-mono font-bold ${diffSfl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
+              ${diffSfl >= 0 ? '+' : ''}${formatFlowerPrice(diffSfl)} SFL
+            </div>
+            <span class="text-[10px] text-slate-400 font-mono block">
+              (${diffSfl >= 0 ? '+' : '-'}$${Math.abs(diffUsdc) < 0.01 ? '<0.01' : Math.abs(diffUsdc).toFixed(2)} USDC)
+            </span>
+          ` : `<span class="text-slate-600 font-mono text-[11px]">-</span>`}
         </td>
         <!-- Last Sold -->
         <td class="py-3 px-4 text-right">
