@@ -8,6 +8,7 @@ let currentSearch = '';
 let currentSort = 'price_asc';
 let currentView = 'grid';
 let isLoading = false;
+let flowerUsdcRate = 0.19501167;
 let customApiKey = localStorage.getItem('opensea_api_key') || 'add815580a904473ba7f162c0ccc4926';
 
 // Approx ETH price in USD for real-time reference
@@ -25,10 +26,10 @@ const totalCountEl = document.getElementById('totalCount');
 
 // Stats Elements
 const statFloor = document.getElementById('statFloor');
+const statFlowerRate = document.getElementById('statFlowerRate');
+const statInGameCount = document.getElementById('statInGameCount');
 const statTotalItems = document.getElementById('statTotalItems');
 const statBoostCount = document.getElementById('statBoostCount');
-const statMedian = document.getElementById('statMedian');
-const statAvg = document.getElementById('statAvg');
 const statProvider = document.getElementById('statProvider');
 const statLastUpdated = document.getElementById('statLastUpdated');
 
@@ -72,6 +73,27 @@ function formatUsdEstimate(wethPrice) {
 }
 
 /**
+ * Format In-Game Price (FLOWER Token)
+ */
+function formatFlowerPrice(num) {
+  if (num === null || num === undefined || isNaN(num) || num <= 0) return 'Unlisted';
+  if (num < 0.001) return num.toFixed(4);
+  if (num < 1) return num.toFixed(3);
+  if (num < 100) return num.toFixed(2);
+  return num.toLocaleString(undefined, { maximumFractionDigits: 1 });
+}
+
+/**
+ * Format Flower Price converted to USDC
+ */
+function formatFlowerUsdc(flowerPrice) {
+  if (!flowerPrice || flowerPrice <= 0 || !flowerUsdcRate) return '';
+  const usdc = flowerPrice * flowerUsdcRate;
+  if (usdc < 0.01) return '<$0.01 USDC';
+  return `~$${usdc.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`;
+}
+
+/**
  * Show Loading Skeletons
  */
 function showLoading(show) {
@@ -107,21 +129,22 @@ function showLoading(show) {
 /**
  * Compute stats on client side from OpenSea items array
  */
-function computeClientStats(items, provider = 'OpenSea API v2', lastUpdated = new Date()) {
+function computeClientStats(items, provider = 'OpenSea + In-Game', lastUpdated = new Date(), flowerRate = flowerUsdcRate) {
   const listedWithPrice = items.filter(i => !i.unlisted && i.rawPrice > 0.000000001);
   const prices = listedWithPrice.map(i => i.rawPrice);
   const minPrice = prices.length ? Math.min(...prices) : 0;
-  const maxPrice = prices.length ? Math.max(...prices) : 0;
-  const avgPrice = prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : 0;
-  const sortedPrices = [...prices].sort((a, b) => a - b);
-  const medianPrice = sortedPrices.length ? sortedPrices[Math.floor(sortedPrices.length / 2)] : 0;
+  const inGameListed = items.filter(i => i.inGameFloor && i.inGameFloor > 0);
   const boostCount = items.filter(i => i.haveBoost).length;
 
   statFloor.textContent = formatCryptoPrice(minPrice);
+  if (statFlowerRate) {
+    statFlowerRate.textContent = '$' + (flowerRate || flowerUsdcRate).toFixed(4);
+  }
+  if (statInGameCount) {
+    statInGameCount.textContent = inGameListed.length;
+  }
   statTotalItems.textContent = items.length;
   statBoostCount.textContent = boostCount;
-  statMedian.textContent = formatCryptoPrice(medianPrice);
-  statAvg.textContent = formatCryptoPrice(avgPrice);
   statProvider.textContent = provider;
 
   const time = new Date(lastUpdated);
@@ -129,17 +152,18 @@ function computeClientStats(items, provider = 'OpenSea API v2', lastUpdated = ne
 }
 
 /**
- * Load Data from pre-bundled OpenSea snapshot or live API
+ * Load Data from pre-bundled snapshot or live API
  */
 async function loadData(forceRefresh = false) {
   showLoading(true);
   try {
     let loaded = false;
 
-    // 1. If we have bundled OpenSea data and not forcing a live network refresh, use it instantly
+    // 1. If we have bundled data and not forcing a live network refresh, use it instantly
     if (!forceRefresh && window.INITIAL_COLLECTIBLES_DATA && window.INITIAL_COLLECTIBLES_DATA.items) {
       allItems = window.INITIAL_COLLECTIBLES_DATA.items;
-      computeClientStats(allItems, 'OpenSea API v2 (Verified)', window.INITIAL_COLLECTIBLES_DATA.lastUpdated);
+      flowerUsdcRate = window.INITIAL_COLLECTIBLES_DATA.flowerUsdcRate || flowerUsdcRate;
+      computeClientStats(allItems, 'OpenSea + In-Game (Verified)', window.INITIAL_COLLECTIBLES_DATA.lastUpdated, flowerUsdcRate);
       loaded = true;
     }
 
@@ -150,7 +174,8 @@ async function loadData(forceRefresh = false) {
         const data = await res.json();
         if (data && data.items) {
           allItems = data.items;
-          computeClientStats(allItems, data.provider || 'OpenSea API v2', data.lastUpdated);
+          flowerUsdcRate = data.flowerUsdcRate || flowerUsdcRate;
+          computeClientStats(allItems, data.provider || 'OpenSea + In-Game', data.lastUpdated, flowerUsdcRate);
           loaded = true;
         }
       }
@@ -189,8 +214,12 @@ function applyFiltersAndSort() {
   }
 
   // 2. Category Filter
-  if (currentFilter === 'recently-sold') {
+  if (currentFilter === 'recently-listed') {
+    result = result.filter(item => item.recentlyListed || (item.orderCreatedAt && item.orderCreatedAt > 0));
+  } else if (currentFilter === 'recently-sold') {
     result = result.filter(item => item.recentlySold || (item.lastSalePrice && item.lastSalePrice > 0));
+  } else if (currentFilter === 'ingame') {
+    result = result.filter(item => item.inGameFloor && item.inGameFloor > 0);
   } else if (currentFilter === 'boost') {
     result = result.filter(item => item.haveBoost);
   } else if (currentFilter === 'cosmetic') {
@@ -202,17 +231,27 @@ function applyFiltersAndSort() {
   } else if (currentFilter === 'tier-high') {
     result = result.filter(item => !item.unlisted && item.rawPrice > 0.005);
   } else if (currentFilter === 'unlisted') {
-    result = result.filter(item => item.unlisted);
+    result = result.filter(item => item.unlisted && (!item.inGameFloor || item.inGameFloor <= 0));
   }
 
   // 3. Sorting
-  if (currentSort === 'recently_sold') {
+  if (currentSort === 'recently_listed') {
+    result.sort((a, b) => (b.orderCreatedAt || 0) - (a.orderCreatedAt || 0));
+  } else if (currentSort === 'recently_sold') {
     result.sort((a, b) => {
       const aTime = a.lastSaleTimestamp || 0;
       const bTime = b.lastSaleTimestamp || 0;
       if (bTime !== aTime) return bTime - aTime;
       return (b.lastSalePrice || 0) - (a.lastSalePrice || 0);
     });
+  } else if (currentSort === 'ingame_asc') {
+    result.sort((a, b) => {
+      const aFloor = a.inGameFloor && a.inGameFloor > 0 ? a.inGameFloor : 999999999;
+      const bFloor = b.inGameFloor && b.inGameFloor > 0 ? b.inGameFloor : 999999999;
+      return aFloor - bFloor;
+    });
+  } else if (currentSort === 'ingame_desc') {
+    result.sort((a, b) => (b.inGameFloor || 0) - (a.inGameFloor || 0));
   } else if (currentSort === 'last_sale_desc') {
     result.sort((a, b) => (b.lastSalePrice || 0) - (a.lastSalePrice || 0));
   } else if (currentSort === 'price_asc') {
@@ -279,6 +318,10 @@ function renderGridView() {
     const currency = item.currency || 'WETH';
     const usdDisplay = isListed ? formatUsdEstimate(item.rawPrice || item.floorPrice) : '';
 
+    const hasInGame = item.inGameFloor && item.inGameFloor > 0;
+    const inGamePriceDisplay = hasInGame ? formatFlowerPrice(item.inGameFloor) : 'Unlisted';
+    const inGameUsdcDisplay = hasInGame ? formatFlowerUsdc(item.inGameFloor) : '';
+
     const boostBadge = item.haveBoost
       ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" title="${item.boostText}">
           <span>⚡ Boost</span>
@@ -290,15 +333,21 @@ function renderGridView() {
     const statusPill = isListed
       ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20">
           <span class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"></span>
-          <span>OpenSea Listed</span>
+          <span>OS Listed</span>
         </span>`
       : `<span class="px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-800 text-slate-500 border border-slate-700/40">
-          Not Listed
+          OS Unlisted
         </span>`;
 
     const recentSaleBadge = item.recentlySold
       ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
           <span>🔥 Sold</span>
+        </span>`
+      : '';
+
+    const recentListedBadge = item.recentlyListed
+      ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30">
+          <span>⚡ Listed</span>
         </span>`
       : '';
 
@@ -310,7 +359,7 @@ function renderGridView() {
 
     const lastSaleDisplay = item.lastSalePrice > 0
       ? `<div class="flex items-center justify-between bg-amber-950/20 px-2.5 py-1.5 rounded-xl border border-amber-900/30 text-[11px]">
-          <span class="text-amber-400 font-medium">Last Sold</span>
+          <span class="text-amber-400 font-medium">Last Sold (OS)</span>
           <div class="text-right">
             <span class="font-bold text-amber-300 font-mono">${formatCryptoPrice(item.lastSalePrice)}</span>
             <span class="text-[10px] text-amber-400/80 font-bold ml-0.5">${item.lastSaleCurrency || 'WETH'}</span>
@@ -327,6 +376,7 @@ function renderGridView() {
               #${item.id}
             </span>
             <div class="flex items-center space-x-1.5">
+              ${recentListedBadge}
               ${recentSaleBadge}
               ${statusPill}
               ${boostBadge}
@@ -342,17 +392,35 @@ function renderGridView() {
           ${boostDetail ? `<div class="mt-2">${boostDetail}</div>` : ''}
         </div>
 
-        <!-- Pricing Area -->
+        <!-- Pricing Area: Side-by-side OpenSea vs In-Game -->
         <div class="space-y-2.5 pt-2 border-t border-slate-800/80">
-          <!-- Floor Price Row -->
-          <div class="flex items-baseline justify-between bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/50">
-            <div>
-              <span class="text-[11px] text-slate-400 font-medium block">OpenSea Floor</span>
-              ${usdDisplay ? `<span class="text-[10px] text-slate-500 font-mono">${usdDisplay}</span>` : ''}
+          <div class="grid grid-cols-2 gap-2">
+            <!-- OpenSea Floor -->
+            <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/60 flex flex-col justify-between">
+              <div>
+                <div class="flex items-center space-x-1 mb-1">
+                  <span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
+                  <span class="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">OpenSea</span>
+                </div>
+                <div class="text-xs font-black ${isListed ? 'text-amber-400' : 'text-slate-500'} tracking-tight">
+                  ${priceDisplay} ${isListed ? `<span class="text-[9px] font-bold text-blue-400">${currency}</span>` : ''}
+                </div>
+              </div>
+              ${usdDisplay ? `<span class="text-[10px] text-slate-500 font-mono mt-0.5">${usdDisplay}</span>` : '<span class="text-[10px] text-slate-600 block mt-0.5">-</span>'}
             </div>
-            <div class="text-right">
-              <span class="text-base font-black ${isListed ? 'text-amber-400' : 'text-slate-500'} tracking-tight">${priceDisplay}</span>
-              ${isListed ? `<span class="text-[10px] font-bold text-blue-400 ml-0.5">${currency}</span>` : ''}
+
+            <!-- In-Game Floor (FLOWER + USDC) -->
+            <div class="bg-slate-950/70 p-2.5 rounded-xl border ${hasInGame ? 'border-pink-500/30 bg-pink-950/10' : 'border-slate-800/60'} flex flex-col justify-between">
+              <div>
+                <div class="flex items-center space-x-1 mb-1">
+                  <span class="text-[10px]">🌸</span>
+                  <span class="text-[10px] ${hasInGame ? 'text-pink-300 font-semibold' : 'text-slate-400 font-semibold'} uppercase tracking-wider">In-Game</span>
+                </div>
+                <div class="text-xs font-black ${hasInGame ? 'text-pink-400' : 'text-slate-500'} tracking-tight">
+                  ${inGamePriceDisplay} ${hasInGame ? `<span class="text-[9px] font-bold text-pink-300/80">SFL</span>` : ''}
+                </div>
+              </div>
+              ${inGameUsdcDisplay ? `<span class="text-[10px] text-emerald-400 font-mono font-medium mt-0.5">${inGameUsdcDisplay}</span>` : '<span class="text-[10px] text-slate-600 block mt-0.5">-</span>'}
             </div>
           </div>
 
@@ -361,12 +429,12 @@ function renderGridView() {
 
           <!-- Supply Metric -->
           <div class="flex items-center justify-between text-[11px] text-slate-400 px-1">
-            <span>Market: <strong class="text-blue-400 font-medium">OpenSea</strong></span>
+            <span>Market: <strong class="text-blue-400 font-medium">OpenSea + Game</strong></span>
             <span>Supply: <strong class="text-slate-200">${item.supply > 1 ? item.supply.toLocaleString() : 'NFT'}</strong></span>
           </div>
 
           <!-- OpenSea Action Button -->
-          <a href="${item.openseaUrl}" target="_blank" rel="noopener noreferrer" 
+          <a href="${item.openseaUrl || ('https://opensea.io/assets/matic/0x22d5f9b7337a28424268307d08405d4f4cd4d7422/' + item.id)}" target="_blank" rel="noopener noreferrer" 
              class="w-full mt-1 inline-flex items-center justify-center space-x-1.5 py-2 rounded-xl text-xs font-semibold bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/30 hover:border-blue-500 transition shadow-sm group-hover:shadow-blue-500/20">
             <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
             <span>${isListed ? 'Buy on OpenSea' : 'View on OpenSea'}</span>
@@ -387,6 +455,10 @@ function renderTableView() {
     const currency = item.currency || 'WETH';
     const usdDisplay = isListed ? formatUsdEstimate(item.rawPrice || item.floorPrice) : '';
 
+    const hasInGame = item.inGameFloor && item.inGameFloor > 0;
+    const inGamePriceDisplay = hasInGame ? formatFlowerPrice(item.inGameFloor) : 'Unlisted';
+    const inGameUsdcDisplay = hasInGame ? formatFlowerUsdc(item.inGameFloor) : '';
+
     const boostBadge = item.haveBoost
       ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" title="${item.boostText}">
           <span>⚡ Boost</span>
@@ -399,12 +471,17 @@ function renderTableView() {
       ? `<span class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">🔥 Sold</span>`
       : '';
 
+    const recentListedBadge = item.recentlyListed
+      ? `<span class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30">⚡ Listed</span>`
+      : '';
+
     return `
       <tr class="hover:bg-slate-800/40 transition">
         <td class="py-3 px-4 font-mono text-slate-400 font-semibold">#${item.id}</td>
         <td class="py-3 px-4 font-bold text-white">
-          <div class="flex items-center">
+          <div class="flex items-center flex-wrap gap-1">
             <span>${item.name}</span>
+            ${recentListedBadge}
             ${recentSaleBadge}
           </div>
         </td>
@@ -414,6 +491,7 @@ function renderTableView() {
             ${item.boostText ? `<span class="text-[11px] text-slate-400 truncate max-w-xs" title="${item.boostText}">${item.boostText}</span>` : ''}
           </div>
         </td>
+        <!-- OpenSea Floor -->
         <td class="py-3 px-4 text-right">
           <div>
             <span class="font-extrabold ${isListed ? 'text-amber-400' : 'text-slate-500'}">${priceDisplay}</span>
@@ -421,17 +499,28 @@ function renderTableView() {
           </div>
           ${usdDisplay && isListed ? `<span class="text-[10px] text-slate-500 font-mono block">${usdDisplay}</span>` : ''}
         </td>
+        <!-- In-Game Floor (FLOWER + USDC) -->
+        <td class="py-3 px-4 text-right">
+          <div>
+            <span class="font-extrabold ${hasInGame ? 'text-pink-400' : 'text-slate-500'}">${inGamePriceDisplay}</span>
+            ${hasInGame ? `<span class="text-[10px] text-pink-300/80 font-bold ml-0.5">SFL</span>` : ''}
+          </div>
+          ${inGameUsdcDisplay && hasInGame ? `<span class="text-[10px] text-emerald-400 font-mono block font-medium">${inGameUsdcDisplay}</span>` : ''}
+        </td>
+        <!-- Last Sold -->
         <td class="py-3 px-4 text-right">
           ${item.lastSalePrice > 0 ? `
             <span class="font-bold text-amber-300 font-mono">${formatCryptoPrice(item.lastSalePrice)}</span>
             <span class="text-[10px] text-amber-400/80 font-bold ml-0.5">${item.lastSaleCurrency || 'WETH'}</span>
           ` : `<span class="text-slate-600">-</span>`}
         </td>
+        <!-- Supply -->
         <td class="py-3 px-4 text-right text-slate-300 font-mono">
           ${item.supply > 1 ? item.supply.toLocaleString() : '1'}
         </td>
+        <!-- Actions -->
         <td class="py-3 px-4 text-center">
-          <a href="${item.openseaUrl}" target="_blank" rel="noopener noreferrer" 
+          <a href="${item.openseaUrl || ('https://opensea.io/assets/matic/0x22d5f9b7337a28424268307d08405d4f4cd4d7422/' + item.id)}" target="_blank" rel="noopener noreferrer" 
              class="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-blue-600/10 text-blue-400 hover:bg-blue-600 hover:text-white border border-blue-500/20 transition">
             <i data-lucide="external-link" class="w-3 h-3"></i>
             <span>${isListed ? 'Buy' : 'View'}</span>
