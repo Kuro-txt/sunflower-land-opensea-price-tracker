@@ -212,7 +212,6 @@ function computeClientStats(items, provider = 'OpenSea + In-Game', lastUpdated =
 }
 
 /**
-/**
  * Resource token check for Sunflower Land ERC-1155 contract
  * Resources have 18 decimals in the contract, whereas collectibles have 0 decimals.
  */
@@ -384,6 +383,34 @@ async function fetchLiveOpenSeaUpdates() {
 }
 
 /**
+ * Live fetch for SFL / Flower token exchange rate directly from sfl.world
+ * Attempts direct fetch first, followed by high-speed CORS proxies so browsers never fail due to CORS
+ */
+async function fetchLiveFlowerExchangeRate() {
+  const url = 'https://sfl.world/api/v1.1/exchange';
+  // 1. Direct fetch
+  try {
+    const res = await fetch(url);
+    if (res.ok) {
+      const d = await res.json();
+      if (d?.sfl?.usd) return Number(d.sfl.usd);
+    }
+  } catch {}
+
+  // 2. High-speed CORS proxy fallback
+  try {
+    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+    const res = await fetch(proxyUrl);
+    if (res.ok) {
+      const d = await res.json();
+      if (d?.sfl?.usd) return Number(d.sfl.usd);
+    }
+  } catch {}
+
+  return null;
+}
+
+/**
  * Automatically sync all 3 data feeds:
  * 1. data/prices.json (Full catalog with floor prices & metadata)
  * 2. data/exchange.json (Live SFL/Flower token exchange rate)
@@ -394,7 +421,7 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
   const syncStatusText = document.getElementById('syncStatusText');
   const syncDot = document.getElementById('syncDot');
   if (syncStatusText) {
-    syncStatusText.textContent = 'Syncing data feeds (Prices, Exchange, In-Game)...';
+    syncStatusText.textContent = 'Syncing live data feeds (Prices, Exchange, In-Game)...';
   }
   if (syncDot) {
     syncDot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping';
@@ -402,20 +429,21 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
 
   try {
     const timestamp = Date.now();
+    const noStore = { cache: 'no-store' };
 
     // 1. Concurrently fetch all 3 data feeds + live sfl.world exchange API + live ETH market price
-    const [pricesRes, exchangeRes, inGameRes, directExchangeRes, ethRes] = await Promise.allSettled([
-      fetch(`./data/prices.json?v=${timestamp}`).then(r => r.ok ? r.json() : null),
-      fetch(`./data/exchange.json?v=${timestamp}`).then(r => r.ok ? r.json() : null),
-      fetch(`./data/ingame_nfts.json?v=${timestamp}`).then(r => r.ok ? r.json() : null),
-      fetch('https://sfl.world/api/v1.1/exchange').then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT').then(r => r.ok ? r.json() : null).catch(() => null)
+    const [pricesRes, exchangeRes, inGameRes, directRate, ethRes] = await Promise.allSettled([
+      fetch(`./data/prices.json?v=${timestamp}`, noStore).then(r => r.ok ? r.json() : null),
+      fetch(`./data/exchange.json?v=${timestamp}`, noStore).then(r => r.ok ? r.json() : null),
+      fetch(`./data/ingame_nfts.json?v=${timestamp}`, noStore).then(r => r.ok ? r.json() : null),
+      fetchLiveFlowerExchangeRate(),
+      fetch('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT', noStore).then(r => r.ok ? r.json() : null).catch(() => null)
     ]);
 
     const pricesData = pricesRes.status === 'fulfilled' ? pricesRes.value : null;
     const exchangeData = exchangeRes.status === 'fulfilled' ? exchangeRes.value : null;
     const inGameData = inGameRes.status === 'fulfilled' ? inGameRes.value : null;
-    const directExchangeData = directExchangeRes.status === 'fulfilled' ? directExchangeRes.value : null;
+    const directRateValue = directRate.status === 'fulfilled' ? directRate.value : null;
     const ethData = ethRes.status === 'fulfilled' ? ethRes.value : null;
 
     if (ethData?.price) {
@@ -427,8 +455,9 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
 
     // 2. Parse live Flower / SFL token exchange rate directly from sfl.world API
     let freshRate = null;
-    if (directExchangeData?.sfl?.usd && Number(directExchangeData.sfl.usd) > 0) {
-      freshRate = Number(directExchangeData.sfl.usd);
+    if (directRateValue && Number(directRateValue) > 0) {
+      freshRate = Number(directRateValue);
+      console.log('🌸 Live SFL rate fetched fresh from sfl.world:', freshRate);
     } else if (exchangeData?.sfl?.usd && Number(exchangeData.sfl.usd) > 0) {
       freshRate = Number(exchangeData.sfl.usd);
     } else if (exchangeData?.data?.sfl?.usd && Number(exchangeData.data.sfl.usd) > 0) {
@@ -497,7 +526,8 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
     }
 
     totalCountEl.textContent = allItems.length;
-    computeClientStats(allItems, 'Auto-Synced (Prices, Exchange & In-Game)', pricesData?.lastUpdated || new Date(), flowerUsdcRate);
+    // Always use current live timestamp for accurate user visibility
+    computeClientStats(allItems, 'Live Synced (OpenSea & In-Game)', new Date(), flowerUsdcRate);
     applyFiltersAndSort();
 
     // 6. Concurrently trigger live OpenSea API updates (real-time events & best listings)
@@ -505,13 +535,13 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
 
     // 7. Update UI sync status
     if (syncStatusText) {
-      syncStatusText.textContent = 'Auto-Synced (Prices, Exchange & In-Game)';
+      syncStatusText.textContent = `Auto-Synced (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
     }
     if (syncDot) {
       syncDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse';
     }
     errorState.classList.add('hidden');
-    console.log(`✅ Auto-synced 3 feeds: prices.json (${allItems.length} items), exchange.json ($${flowerUsdcRate.toFixed(4)}), ingame_nfts.json (${inGameMap.size} items)`);
+    console.log(`✅ Live synced 3 feeds: prices.json (${allItems.length} items), rate: $${flowerUsdcRate.toFixed(4)}, in-game: ${inGameMap.size} items`);
   } catch (err) {
     console.error('Error during auto-sync:', err);
     if (syncStatusText) {
@@ -1106,9 +1136,19 @@ if (viewTableBtn) {
 
 // Refresh button (forces complete real-time sync across OpenSea + In-Game)
 if (refreshBtn) {
-  refreshBtn.addEventListener('click', () => {
+  refreshBtn.addEventListener('click', async () => {
+    if (refreshIcon) refreshIcon.classList.add('animate-spin-custom');
+    const syncStatusText = document.getElementById('syncStatusText');
+    if (syncStatusText) syncStatusText.textContent = 'Refreshing live APIs & OpenSea...';
     liveFloorCache.clear();
-    syncAllDataOnWebOpen(true);
+    await syncAllDataOnWebOpen(true);
+    if (filteredItems.length > 0) {
+      await refreshVisibleItemFloors(filteredItems.slice(0, 16));
+    }
+    if (refreshIcon) refreshIcon.classList.remove('animate-spin-custom');
+    if (syncStatusText) {
+      syncStatusText.textContent = `⚡ Live Updated (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
+    }
   });
 }
 
