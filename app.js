@@ -434,7 +434,7 @@ function renderGridView() {
           </div>
 
           <!-- OpenSea Action Button -->
-          <a href="${item.openseaUrl}" target="_blank" rel="noopener noreferrer" 
+          <a href="${item.openseaUrl || ('https://opensea.io/assets/matic/0x22d5f9b7337a28424268307d08405d4f4cd4d7422/' + item.id)}" target="_blank" rel="noopener noreferrer" 
              class="w-full mt-1 inline-flex items-center justify-center space-x-1.5 py-2 rounded-xl text-xs font-semibold bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/30 hover:border-blue-500 transition shadow-sm group-hover:shadow-blue-500/20">
             <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
             <span>${isListed ? 'Buy on OpenSea' : 'View on OpenSea'}</span>
@@ -520,7 +520,7 @@ function renderTableView() {
         </td>
         <!-- Actions -->
         <td class="py-3 px-4 text-center">
-          <a href="${item.openseaUrl}" target="_blank" rel="noopener noreferrer" 
+          <a href="${item.openseaUrl || ('https://opensea.io/assets/matic/0x22d5f9b7337a28424268307d08405d4f4cd4d7422/' + item.id)}" target="_blank" rel="noopener noreferrer" 
              class="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-blue-600/10 text-blue-400 hover:bg-blue-600 hover:text-white border border-blue-500/20 transition">
             <i data-lucide="external-link" class="w-3 h-3"></i>
             <span>${isListed ? 'Buy' : 'View'}</span>
