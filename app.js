@@ -32,8 +32,8 @@ let isLoading = false;
 let flowerUsdcRate = 0.19009181;
 let customApiKey = localStorage.getItem('opensea_api_key') || 'add815580a904473ba7f162c0ccc4926';
 
-// Approx ETH price in USD for real-time reference
-const ETH_USD_ESTIMATE = 2500;
+// Live ETH price in USD (auto-updated from live market API)
+let ethUsdPrice = 2500;
 const OPENSEA_CONTRACT_ADDRESS = '0x22d5f9b75c524fec1d6619787e582644cd4d7422';
 
 /**
@@ -112,16 +112,17 @@ function formatTimeAgo(timestampMs) {
  */
 function formatUsdEstimate(wethPrice) {
   if (!wethPrice || wethPrice <= 0) return '';
-  const usd = wethPrice * ETH_USD_ESTIMATE;
+  const usd = wethPrice * ethUsdPrice;
   if (usd < 0.01) return '<$0.01 USD';
   return `~$${usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
 }
 
 /**
- * Format In-Game Price (FLOWER Token)
+ * Format In-Game Price (FLOWER / SFL Token)
  */
 function formatFlowerPrice(num) {
-  if (num === null || num === undefined || isNaN(num) || num <= 0) return 'Unlisted';
+  if (num === null || num === undefined || isNaN(num) || num <= 0) return '0';
+  if (num < 0.00001) return '<0.0001';
   if (num < 0.001) return num.toFixed(4);
   if (num < 1) return num.toFixed(3);
   if (num < 100) return num.toFixed(2);
@@ -136,6 +137,16 @@ function formatFlowerUsdc(flowerPrice) {
   const usdc = flowerPrice * flowerUsdcRate;
   if (usdc < 0.01) return '<$0.01 USDC';
   return `~$${usdc.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`;
+}
+
+/**
+ * Convert OpenSea WETH price to Flower / SFL token equivalent based on live USD exchange rates
+ */
+function formatOpenSeaFlowerEquivalent(wethPrice) {
+  if (!wethPrice || wethPrice <= 0 || !flowerUsdcRate || flowerUsdcRate <= 0) return '';
+  const usd = wethPrice * ethUsdPrice;
+  const flowerEquiv = usd / flowerUsdcRate;
+  return `≈ ${formatFlowerPrice(flowerEquiv)} SFL`;
 }
 
 /**
@@ -320,18 +331,27 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
   try {
     const timestamp = Date.now();
 
-    // 1. Concurrently fetch all 3 data feeds + live sfl.world exchange API
-    const [pricesRes, exchangeRes, inGameRes, directExchangeRes] = await Promise.allSettled([
+    // 1. Concurrently fetch all 3 data feeds + live sfl.world exchange API + live ETH market price
+    const [pricesRes, exchangeRes, inGameRes, directExchangeRes, ethRes] = await Promise.allSettled([
       fetch(`./data/prices.json?v=${timestamp}`).then(r => r.ok ? r.json() : null),
       fetch(`./data/exchange.json?v=${timestamp}`).then(r => r.ok ? r.json() : null),
       fetch(`./data/ingame_nfts.json?v=${timestamp}`).then(r => r.ok ? r.json() : null),
-      fetch('https://sfl.world/api/v1.1/exchange').then(r => r.ok ? r.json() : null).catch(() => null)
+      fetch('https://sfl.world/api/v1.1/exchange').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT').then(r => r.ok ? r.json() : null).catch(() => null)
     ]);
 
     const pricesData = pricesRes.status === 'fulfilled' ? pricesRes.value : null;
     const exchangeData = exchangeRes.status === 'fulfilled' ? exchangeRes.value : null;
     const inGameData = inGameRes.status === 'fulfilled' ? inGameRes.value : null;
     const directExchangeData = directExchangeRes.status === 'fulfilled' ? directExchangeRes.value : null;
+    const ethData = ethRes.status === 'fulfilled' ? ethRes.value : null;
+
+    if (ethData?.price) {
+      const p = parseFloat(ethData.price);
+      if (p > 500 && p < 20000) {
+        ethUsdPrice = p;
+      }
+    }
 
     // 2. Parse live Flower / SFL token exchange rate directly from sfl.world API
     let freshRate = null;
@@ -637,25 +657,52 @@ function renderGridView() {
         <div class="space-y-2.5 pt-2 border-t border-slate-800/80">
           <div class="grid grid-cols-2 gap-2">
             <!-- OpenSea Floor -->
-            <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/60 flex flex-col justify-between">
+            <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 flex flex-col justify-between hover:border-blue-500/40 transition">
               <div>
-                <div class="flex items-center space-x-1 mb-1">
-                  <span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
-                  <span class="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">OpenSea</span>
+                <div class="flex items-center justify-between mb-1.5">
+                  <div class="flex items-center space-x-1">
+                    <span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
+                    <span class="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">OpenSea</span>
+                  </div>
+                  <span class="text-[9px] font-medium px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">WETH</span>
                 </div>
-                <div class="text-xs font-black ${isListed ? 'text-amber-400' : 'text-slate-500'} tracking-tight">
-                  ${priceDisplay} ${isListed ? `<span class="text-[9px] font-bold text-blue-400">${currency}</span>` : ''}
-                </div>
+                ${isListed ? `
+                  <div class="space-y-1.5">
+                    <div>
+                      <div class="text-xs font-black text-amber-400 tracking-tight">
+                        ${priceDisplay} <span class="text-[9px] font-bold text-blue-400">${currency}</span>
+                      </div>
+                      <div class="text-[10px] text-slate-400 font-mono font-medium">
+                        ${usdDisplay}
+                      </div>
+                    </div>
+
+                    <div class="pt-1.5 border-t border-slate-800/80">
+                      <div class="text-[9px] uppercase tracking-wider text-slate-500 font-medium">In-Game Equiv</div>
+                      <div class="text-[11px] font-bold text-amber-300 font-mono flex items-center space-x-1 mt-0.5">
+                        <span>🌸</span>
+                        <span>${formatOpenSeaFlowerEquivalent(item.rawPrice || item.floorPrice)}</span>
+                      </div>
+                    </div>
+                  </div>
+                ` : `
+                  <div class="py-2.5">
+                    <div class="text-xs font-bold text-slate-500 tracking-tight">Unlisted</div>
+                    <span class="text-[10px] text-slate-600 block mt-0.5">-</span>
+                  </div>
+                `}
               </div>
-              ${usdDisplay ? `<span class="text-[10px] text-slate-500 font-mono mt-0.5">${usdDisplay}</span>` : '<span class="text-[10px] text-slate-600 block mt-0.5">-</span>'}
             </div>
 
             <!-- In-Game Floor (FLOWER + USDC) with -10% calculation -->
-            <div class="bg-slate-950/70 p-2.5 rounded-xl border ${hasInGame ? 'border-pink-500/30 bg-pink-950/10' : 'border-slate-800/60'} flex flex-col justify-between">
+            <div class="bg-slate-950/70 p-2.5 rounded-xl border ${hasInGame ? 'border-pink-500/30 bg-pink-950/10 hover:border-pink-500/50' : 'border-slate-800/80'} flex flex-col justify-between transition">
               <div>
-                <div class="flex items-center space-x-1 mb-1.5">
-                  <span class="text-[10px]">🌸</span>
-                  <span class="text-[10px] ${hasInGame ? 'text-pink-300 font-semibold' : 'text-slate-400 font-semibold'} uppercase tracking-wider">In-Game</span>
+                <div class="flex items-center justify-between mb-1.5">
+                  <div class="flex items-center space-x-1">
+                    <span class="text-[10px]">🌸</span>
+                    <span class="text-[10px] ${hasInGame ? 'text-pink-300 font-semibold' : 'text-slate-400 font-semibold'} uppercase tracking-wider">In-Game</span>
+                  </div>
+                  <span class="text-[9px] font-medium px-1.5 py-0.5 rounded ${hasInGame ? 'bg-pink-500/10 text-pink-300 border border-pink-500/20' : 'bg-slate-800 text-slate-500'}">SFL</span>
                 </div>
                 ${hasInGame ? `
                   <div class="space-y-1.5">
@@ -669,17 +716,18 @@ function renderGridView() {
 
                     <!-- -10% Price & USDC below it -->
                     <div class="pt-1.5 border-t border-pink-500/20">
-                      <div class="text-xs font-bold text-pink-300 tracking-tight">
-                        <span class="text-[10px] text-slate-400 font-normal">-10%: </span>${formatFlowerPrice(item.inGameFloor * 0.9)} <span class="text-[9px] font-bold text-pink-300/80">SFL</span>
-                      </div>
-                      <div class="text-[10px] text-slate-400 font-mono">
-                        ${formatFlowerUsdc(item.inGameFloor * 0.9)}
+                      <div class="text-[9px] uppercase tracking-wider text-slate-400 font-medium">After -10% Fee</div>
+                      <div class="flex items-baseline justify-between mt-0.5">
+                        <span class="text-[11px] font-bold text-pink-300 font-mono">${formatFlowerPrice(item.inGameFloor * 0.9)} SFL</span>
+                        <span class="text-[10px] text-slate-400 font-mono">${formatFlowerUsdc(item.inGameFloor * 0.9)}</span>
                       </div>
                     </div>
                   </div>
                 ` : `
-                  <div class="text-xs font-black text-slate-500 tracking-tight">Unlisted</div>
-                  <span class="text-[10px] text-slate-600 block mt-0.5">-</span>
+                  <div class="py-2.5">
+                    <div class="text-xs font-bold text-slate-500 tracking-tight">Unlisted</div>
+                    <span class="text-[10px] text-slate-600 block mt-0.5">-</span>
+                  </div>
                 `}
               </div>
             </div>
@@ -754,7 +802,12 @@ function renderTableView() {
             <span class="font-extrabold ${isListed ? 'text-amber-400' : 'text-slate-500'}">${priceDisplay}</span>
             ${isListed ? `<span class="text-[10px] text-blue-400 font-bold ml-0.5">${currency}</span>` : ''}
           </div>
-          ${usdDisplay && isListed ? `<span class="text-[10px] text-slate-500 font-mono block">${usdDisplay}</span>` : ''}
+          ${isListed ? `
+            <div class="text-[10px] text-slate-400 font-mono">
+              <span>${usdDisplay}</span>
+              <span class="text-amber-300 font-medium ml-1">(${formatOpenSeaFlowerEquivalent(item.rawPrice || item.floorPrice)})</span>
+            </div>
+          ` : '<span class="text-[10px] text-slate-600 block">-</span>'}
         </td>
         <!-- In-Game Floor (FLOWER + USDC) with -10% calculation -->
         <td class="py-3 px-4 text-right">
