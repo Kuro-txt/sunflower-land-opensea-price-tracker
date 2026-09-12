@@ -561,21 +561,6 @@ function renderGridView() {
           🎨 Cosmetic
         </span>`;
 
-    const statusPill = isListed
-      ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20">
-          <span class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"></span>
-          <span>OS Listed</span>
-        </span>`
-      : `<span class="px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-800 text-slate-500 border border-slate-700/40">
-          OS Unlisted
-        </span>`;
-
-    const recentSaleBadge = item.recentlySold
-      ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
-          <span>🔥 Sold</span>
-        </span>`
-      : '';
-
     const listedAgo = item.lastListedTimestamp ? formatTimeAgo(item.lastListedTimestamp) : '';
     const recentListedBadge = item.recentlyListed
       ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30" title="Listed ${listedAgo || 'recently'} on OpenSea">
@@ -609,8 +594,6 @@ function renderGridView() {
             </span>
             <div class="flex items-center space-x-1.5">
               ${recentListedBadge}
-              ${recentSaleBadge}
-              ${statusPill}
               ${boostBadge}
             </div>
           </div>
@@ -699,10 +682,6 @@ function renderTableView() {
           Cosmetic
         </span>`;
 
-    const recentSaleBadge = item.recentlySold
-      ? `<span class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">🔥 Sold</span>`
-      : '';
-
     const listedAgo = item.lastListedTimestamp ? formatTimeAgo(item.lastListedTimestamp) : '';
     const recentListedBadge = item.recentlyListed
       ? `<span class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30" title="Listed ${listedAgo || 'recently'} on OpenSea">⚡ Listed ${listedAgo ? `(${listedAgo})` : ''}</span>`
@@ -715,7 +694,6 @@ function renderTableView() {
           <div class="flex items-center flex-wrap gap-1">
             <span>${item.name}</span>
             ${recentListedBadge}
-            ${recentSaleBadge}
           </div>
         </td>
         <td class="py-3 px-4">
