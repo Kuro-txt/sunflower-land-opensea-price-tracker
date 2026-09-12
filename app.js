@@ -168,7 +168,107 @@ function computeClientStats(items, provider = 'OpenSea + In-Game', lastUpdated =
 }
 
 /**
- * Load Data from pre-bundled snapshot or live API
+ * Fetch live fresh listings & events directly from OpenSea API v2 in real-time
+ */
+async function fetchLiveOpenSeaUpdates() {
+  const apiKey = customApiKey || localStorage.getItem('opensea_api_key') || 'add815580a904473ba7f162c0ccc4926';
+  if (!apiKey || !allItems.length) return;
+
+  try {
+    const headers = {
+      'x-api-key': apiKey,
+      'accept': 'application/json'
+    };
+
+    const [listingEventsRes, saleEventsRes, bestListingsRes] = await Promise.all([
+      fetch('https://api.opensea.io/api/v2/events/collection/sunflower-land-collectibles?event_type=listing&limit=50', { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('https://api.opensea.io/api/v2/events/collection/sunflower-land-collectibles?event_type=sale&limit=50', { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/best?limit=50', { headers }).then(r => r.ok ? r.json() : null).catch(() => null)
+    ]);
+
+    let updatedCount = 0;
+
+    // 1. Process recent live listings
+    if (listingEventsRes?.asset_events) {
+      for (const ev of listingEventsRes.asset_events) {
+        const id = parseInt(ev.asset?.identifier, 10);
+        if (!id) continue;
+        const target = allItems.find(i => i.id === id);
+        if (target) {
+          const dec = ev.payment?.decimals || 18;
+          const price = ev.payment?.quantity ? (Number(ev.payment.quantity) / Math.pow(10, dec)) : 0;
+          const ts = (ev.event_timestamp || 0) * 1000;
+          target.recentlyListed = true;
+          if (!target.lastListedTimestamp || ts > target.lastListedTimestamp) {
+            target.lastListedTimestamp = ts;
+            target.lastListedPrice = price;
+          }
+          if (target.unlisted && price > 0) {
+            target.unlisted = false;
+            target.rawPrice = price;
+            target.floorPrice = price;
+          }
+          updatedCount++;
+        }
+      }
+    }
+
+    // 2. Process recent live sales
+    if (saleEventsRes?.asset_events) {
+      for (const ev of saleEventsRes.asset_events) {
+        const id = parseInt(ev.asset?.identifier || ev.nft?.identifier, 10);
+        if (!id) continue;
+        const target = allItems.find(i => i.id === id);
+        if (target) {
+          const dec = ev.payment?.decimals || 18;
+          const price = ev.payment?.quantity ? (Number(ev.payment.quantity) / Math.pow(10, dec)) : 0;
+          const ts = (ev.event_timestamp || 0) * 1000;
+          target.recentlySold = true;
+          if (!target.lastSaleTimestamp || ts > target.lastSaleTimestamp) {
+            target.lastSaleTimestamp = ts;
+            target.lastSalePrice = price;
+            target.lastSaleCurrency = ev.payment?.symbol || 'WETH';
+          }
+          updatedCount++;
+        }
+      }
+    }
+
+    // 3. Process live best floor listings
+    if (bestListingsRes?.listings) {
+      for (const l of bestListingsRes.listings) {
+        const offer = l.protocol_data?.parameters?.offer?.[0];
+        const id = parseInt(offer?.identifierOrCriteria, 10);
+        if (!id) continue;
+        const target = allItems.find(i => i.id === id);
+        if (target) {
+          const dec = l.price?.current?.decimals != null ? l.price.current.decimals : 18;
+          const totalVal = l.price?.current?.value ? (Number(l.price.current.value) / Math.pow(10, dec)) : 0;
+          const startAmount = Number(offer?.startAmount || '1');
+          const unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
+          if (unitPrice > 0) {
+            target.unlisted = false;
+            target.rawPrice = unitPrice;
+            target.floorPrice = unitPrice;
+            target.currency = l.price?.current?.currency || 'WETH';
+          }
+          updatedCount++;
+        }
+      }
+    }
+
+    if (updatedCount > 0) {
+      computeClientStats(allItems, 'OpenSea Live API v2 (Real-Time)', new Date(), flowerUsdcRate);
+      applyFiltersAndSort();
+      console.log(`⚡ Live OpenSea API updated ${updatedCount} items in real-time!`);
+    }
+  } catch (err) {
+    console.warn('Live OpenSea API fetch notice:', err.message);
+  }
+}
+
+/**
+ * Load Data from pre-bundled snapshot and live API
  */
 async function loadData(forceRefresh = false) {
   showLoading(true);
@@ -183,8 +283,8 @@ async function loadData(forceRefresh = false) {
       loaded = true;
     }
 
-    // 2. Otherwise load data/prices.json
-    if (!loaded) {
+    // 2. Load latest data/prices.json
+    if (!loaded || forceRefresh) {
       const res = await fetch('./data/prices.json?v=' + Date.now());
       if (res.ok) {
         const data = await res.json();
@@ -203,6 +303,9 @@ async function loadData(forceRefresh = false) {
 
     totalCountEl.textContent = allItems.length;
     applyFiltersAndSort();
+
+    // 3. Always attempt live OpenSea API update in real-time
+    fetchLiveOpenSeaUpdates();
   } catch (err) {
     console.error('Error loading data:', err);
     errorState.classList.remove('hidden');
@@ -681,9 +784,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (window.INITIAL_COLLECTIBLES_DATA && window.INITIAL_COLLECTIBLES_DATA.items && window.INITIAL_COLLECTIBLES_DATA.items.length > 0) {
     allItems = window.INITIAL_COLLECTIBLES_DATA.items;
+    flowerUsdcRate = window.INITIAL_COLLECTIBLES_DATA.flowerUsdcRate || flowerUsdcRate;
     totalCountEl.textContent = allItems.length;
-    computeClientStats(allItems, 'OpenSea API v2 (Verified)', window.INITIAL_COLLECTIBLES_DATA.lastUpdated);
+    computeClientStats(allItems, 'OpenSea + In-Game (Verified)', window.INITIAL_COLLECTIBLES_DATA.lastUpdated, flowerUsdcRate);
     applyFiltersAndSort();
+    // Fetch fresh live listings & events directly from OpenSea API
+    fetchLiveOpenSeaUpdates();
   } else {
     loadData(false);
   }
