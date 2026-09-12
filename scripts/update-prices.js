@@ -9,11 +9,18 @@
 
 const fs = require('fs');
 const path = require('path');
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first');
 
 const OPENSEA_API_KEY = process.env.OPENSEA_API_KEY || process.argv[2] || 'add815580a904473ba7f162c0ccc4926';
 const COLLECTION_SLUG = 'sunflower-land-collectibles';
 const CONTRACT_ADDRESS = '0x22d5f9b75c524fec1d6619787e582644cd4d7422';
 const ROOT_DIR = path.resolve(__dirname, '..');
+
+function isResourceToken(id) {
+  const num = Number(id);
+  return (num >= 201 && num <= 220) || (num >= 601 && num <= 605) || (num >= 301 && num <= 304);
+}
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -65,10 +72,17 @@ async function fetchInGamePrices() {
   const inGameMap = new Map();
   try {
     const data = await fetchWithRetry('https://sfl.world/api/v1/nfts');
-    const list = data?.data || [];
+    const list = data?.collectibles || data?.data || (Array.isArray(data) ? data : []);
     for (const item of list) {
       if (item.id && item.floor) {
-        inGameMap.set(String(item.id), Number(item.floor));
+        inGameMap.set(String(item.id), {
+          floor: Number(item.floor),
+          lastSalePrice: item.lastSalePrice ? Number(item.lastSalePrice) : 0,
+          supply: item.supply ? Number(item.supply) : 1,
+          haveBoost: item.have_boost === 1,
+          boostText: item.boost_text || '',
+          name: item.name || ''
+        });
       }
     }
     console.log(`✅ Fetched ${inGameMap.size} in-game listed items.`);
@@ -80,11 +94,68 @@ async function fetchInGamePrices() {
       const local = JSON.parse(fs.readFileSync(localFile, 'utf8'));
       const list = local?.collectibles || local?.data || (Array.isArray(local) ? local : []);
       list.forEach(item => {
-        if (item.id && item.floor) inGameMap.set(String(item.id), Number(item.floor));
+        if (item.id && item.floor) {
+          inGameMap.set(String(item.id), {
+            floor: Number(item.floor),
+            lastSalePrice: item.lastSalePrice ? Number(item.lastSalePrice) : 0,
+            supply: item.supply ? Number(item.supply) : 1,
+            haveBoost: item.have_boost === 1,
+            boostText: item.boost_text || '',
+            name: item.name || ''
+          });
+        }
       });
     }
   }
   return inGameMap;
+}
+
+// Verify exact OpenSea floor price for in-game traded items directly via /nfts/{id}/best
+async function verifyOpenSeaFloorsForInGameItems(inGameMap, listingsByToken) {
+  console.log(`🔍 Verifying live OpenSea floors for ${inGameMap.size} in-game active items...`);
+  const ids = Array.from(inGameMap.keys());
+  const batchSize = 8;
+  let verifiedCount = 0;
+
+  for (let i = 0; i < ids.length; i += batchSize) {
+    const chunk = ids.slice(i, i + batchSize);
+    await Promise.all(chunk.map(async (id) => {
+      try {
+        const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/${COLLECTION_SLUG}/nfts/${id}/best`, {
+          headers: { 'x-api-key': OPENSEA_API_KEY, 'accept': 'application/json' }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const cur = data.price?.current?.currency || 'WETH';
+        const dec = data.price?.current?.decimals != null ? data.price.current.decimals : 18;
+        const totalVal = data.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
+        const offer = data.protocol_data?.parameters?.offer?.[0];
+        const startAmount = Number(offer?.startAmount || '1');
+
+        let unitPrice = totalVal;
+        if (isResourceToken(id)) {
+          if (startAmount < 1e18) return;
+          unitPrice = totalVal / (startAmount / 1e18);
+          if (unitPrice < 0.00001 || unitPrice > 500) return;
+        } else {
+          unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
+          if (unitPrice < 0.000001) return;
+        }
+
+        if (unitPrice > 0) {
+          listingsByToken.set(id, [{
+            unitPrice,
+            currency: cur,
+            orderCreatedAt: data.order_created_at
+          }]);
+          verifiedCount++;
+        }
+      } catch {}
+    }));
+    process.stdout.write(`  Verified ${Math.min(i + batchSize, ids.length)}/${ids.length} in-game items (${verifiedCount} listed on OS)\r`);
+    await sleep(100);
+  }
+  console.log(`\n✅ Verified ${verifiedCount} in-game items actively listed on OpenSea.`);
 }
 
 // 3. Fetch all OpenSea active listings
@@ -113,7 +184,17 @@ async function fetchAllOpenSeaListings() {
         const dec = l.price?.current?.decimals != null ? l.price.current.decimals : 18;
         const totalVal = l.price?.current?.value ? (Number(l.price.current.value) / Math.pow(10, dec)) : 0;
         const startAmount = Number(offer?.startAmount || '1');
-        const unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
+
+        let unitPrice = totalVal;
+        if (isResourceToken(id)) {
+          // Resources have 18 decimals in the Sunflower Land contract
+          if (startAmount < 1e18) continue; // Skip micro-dust orders (<1 whole item)
+          unitPrice = totalVal / (startAmount / 1e18);
+          if (unitPrice < 0.00001 || unitPrice > 500) continue; // Skip spam orders
+        } else {
+          unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
+          if (unitPrice < 0.000001) continue; // Skip micro-dust
+        }
 
         if (!listingsByToken.has(id)) {
           listingsByToken.set(id, []);
@@ -234,10 +315,15 @@ async function fetchRecentSaleEvents() {
 async function main() {
   console.log('🚀 Starting fresh price update...\n');
 
-  const [flowerRate, inGameMap, listingsByToken, recentListings, recentSales] = await Promise.all([
-    fetchExchangeRate(),
-    fetchInGamePrices(),
-    fetchAllOpenSeaListings(),
+  const flowerRate = await fetchExchangeRate();
+  const inGameMap = await fetchInGamePrices();
+  const listingsByToken = new Map();
+
+  // 1. Verify exact live OpenSea floors for all active in-game traded items
+  await verifyOpenSeaFloorsForInGameItems(inGameMap, listingsByToken);
+
+  // 2. Fetch recent listing and sale events from OpenSea
+  const [recentListings, recentSales] = await Promise.all([
     fetchRecentListingEvents(),
     fetchRecentSaleEvents()
   ]);
@@ -255,6 +341,7 @@ async function main() {
   const allIds = new Set([
     ...Object.keys(knownIds).map(k => String(k)),
     ...Array.from(listingsByToken.keys()).map(k => String(k)),
+    ...Array.from(inGameMap.keys()).map(k => String(k)),
     ...Array.from(existingMap.keys()).map(k => String(k))
   ]);
 
@@ -262,11 +349,12 @@ async function main() {
 
   for (const idStr of allIds) {
     const numId = parseInt(idStr, 10);
-    const officialName = knownIds[numId] || existingMap.get(idStr)?.name || `Sunflower Land #${numId}`;
+    const inGameInfo = inGameMap.get(idStr);
     const existing = existingMap.get(idStr) || {};
+    const officialName = (inGameInfo && inGameInfo.name) ? inGameInfo.name : (knownIds[numId] || existing.name || `Sunflower Land #${numId}`);
 
     const tokenListings = listingsByToken.get(idStr) || [];
-    const isListed = tokenListings.length > 0;
+    let isListed = tokenListings.length > 0;
     let rawPrice = 0;
     let floorPrice = 0;
     let currency = 'WETH';
@@ -285,15 +373,27 @@ async function main() {
     const lastListedTimestamp = rl ? rl.timestampMs : (existing.recentlyListed ? existing.lastListedTimestamp : 0);
     const lastListedPrice = rl ? rl.price : (existing.recentlyListed ? existing.lastListedPrice : 0);
 
+    // If item was unlisted in floor check but has an active recent listing event
+    if (!isListed && rl && rl.price > 0 && rl.price >= 0.00001 && (!isResourceToken(numId) || rl.price < 100)) {
+      isListed = true;
+      rawPrice = rl.price;
+      floorPrice = rl.price;
+      currency = rl.currency || 'WETH';
+    }
+
     const rs = recentSales.get(idStr) || (existing.recentlySold ? { timestampMs: existing.lastSaleTimestamp, price: existing.lastSalePrice, currency: existing.lastSaleCurrency } : null);
     const recentlySold = Boolean(rs);
     const lastSalePrice = rs ? rs.price : 0;
     const lastSaleCurrency = rs ? (rs.currency || 'WETH') : 'WETH';
     const lastSaleTimestamp = rs ? rs.timestampMs : 0;
 
-    let inGameFloor = inGameMap.get(idStr) || existing.inGameFloor || existing.inGamePriceSfl || null;
+    let inGameFloor = inGameInfo ? inGameInfo.floor : (existing.inGameFloor || null);
     if (inGameFloor) inGameFloor = Number(inGameFloor.toFixed(4));
     const inGameFloorUsdc = inGameFloor ? Number((inGameFloor * flowerRate).toFixed(4)) : null;
+
+    const haveBoost = inGameInfo ? inGameInfo.haveBoost : Boolean(existing.haveBoost);
+    const boostText = (inGameInfo && inGameInfo.boostText) ? inGameInfo.boostText : (existing.boostText || '');
+    const supply = (inGameInfo && inGameInfo.supply > 1) ? inGameInfo.supply : (existing.supply || 1);
 
     items.push({
       id: numId,
@@ -301,9 +401,9 @@ async function main() {
       rawPrice,
       floorPrice,
       currency,
-      supply: existing.supply || 1,
-      haveBoost: Boolean(existing.haveBoost),
-      boostText: existing.boostText || '',
+      supply,
+      haveBoost,
+      boostText,
       unlisted: !isListed,
       lastSalePrice,
       lastSaleCurrency,
