@@ -18,7 +18,7 @@ function savePreference(key, value) {
   } catch {}
 }
 
-const ALLOWED_FILTERS = ['all', 'boost', 'recently-listed'];
+const ALLOWED_FILTERS = ['all', 'boost', 'without-boost', 'no-boost', 'recently-listed', 'cosmetic'];
 const ALLOWED_SORTS = ['price_asc', 'price_desc', 'ingame_asc', 'ingame_desc', 'recently_listed', 'recently_sold', 'last_sale_desc', 'supply_desc', 'supply_asc', 'name_asc'];
 const ALLOWED_VIEWS = ['grid', 'table'];
 
@@ -462,17 +462,17 @@ function applyFiltersAndSort() {
   }
 
   // 2. Category Filter
-  if (currentFilter === 'recently-listed') {
+  if (currentFilter === 'boost') {
+    result = result.filter(item => item.haveBoost);
+  } else if (currentFilter === 'without-boost' || currentFilter === 'no-boost' || currentFilter === 'cosmetic') {
+    result = result.filter(item => !item.haveBoost);
+  } else if (currentFilter === 'recently-listed') {
     result = result.filter(item => item.recentlyListed);
     result.sort((a, b) => {
       const aTime = a.lastListedTimestamp || (a.orderCreatedAt ? a.orderCreatedAt * 1000 : 0);
       const bTime = b.lastListedTimestamp || (b.orderCreatedAt ? b.orderCreatedAt * 1000 : 0);
       return bTime - aTime;
     });
-  } else if (currentFilter === 'boost') {
-    result = result.filter(item => item.haveBoost);
-  } else if (currentFilter === 'cosmetic') {
-    result = result.filter(item => !item.haveBoost);
   } else if (currentFilter === 'tier-cheap') {
     result = result.filter(item => !item.unlisted && item.rawPrice > 0 && item.rawPrice < 0.0005);
   } else if (currentFilter === 'tier-mid') {
