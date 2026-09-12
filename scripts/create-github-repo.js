@@ -62,8 +62,8 @@ function getProjectFiles(dir, baseDir = dir) {
     const fullPath = path.join(dir, item.name);
     const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
 
-    // Ignore node_modules, .git, .github (needs workflow scope), etc.
-    if (item.name === 'node_modules' || item.name === '.git' || item.name === '.github' || item.name.endsWith('.log') || item.name === '.env') {
+    // Ignore node_modules, .git, temp files, and environment secrets
+    if (item.name === 'node_modules' || item.name === '.git' || item.name.endsWith('.log') || item.name === '.env' || item.name === 'scratch') {
       continue;
     }
 
@@ -166,11 +166,17 @@ async function main() {
 
       if (putRes.status === 200 || putRes.status === 201) {
         console.log('✅ Updated');
+      } else if (file.path.startsWith('.github/workflows/') && (putRes.status === 404 || putRes.status === 403)) {
+        console.log('ℹ️ Skipped (Requires "workflow" OAuth scope on GitHub token)');
       } else {
         console.log(`⚠️ (Status ${putRes.status})`);
       }
     } catch (fileErr) {
-      console.log(`❌ Error: ${fileErr.message}`);
+      if (file.path.startsWith('.github/workflows/')) {
+        console.log('ℹ️ Skipped (Requires "workflow" OAuth scope on GitHub token)');
+      } else {
+        console.log(`❌ Error: ${fileErr.message}`);
+      }
     }
   }
 
