@@ -78,7 +78,8 @@ async function fetchInGamePrices() {
     const localFile = path.join(ROOT_DIR, 'data', 'ingame_nfts.json');
     if (fs.existsSync(localFile)) {
       const local = JSON.parse(fs.readFileSync(localFile, 'utf8'));
-      (local?.data || []).forEach(item => {
+      const list = local?.collectibles || local?.data || (Array.isArray(local) ? local : []);
+      list.forEach(item => {
         if (item.id && item.floor) inGameMap.set(String(item.id), Number(item.floor));
       });
     }
