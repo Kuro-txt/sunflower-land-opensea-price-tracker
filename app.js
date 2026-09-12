@@ -1,12 +1,33 @@
 // Sunflower Land OpenSea Price Tracker Client Application
 // Sourced directly from OpenSea API v2
 
+// Preference management helpers for remembering user configuration
+function getSavedPreference(key, fallback, allowedList) {
+  try {
+    const val = localStorage.getItem(key);
+    if (val && (!allowedList || allowedList.includes(val))) {
+      return val;
+    }
+  } catch {}
+  return fallback;
+}
+
+function savePreference(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+}
+
+const ALLOWED_FILTERS = ['all', 'boost', 'recently-listed'];
+const ALLOWED_SORTS = ['price_asc', 'price_desc', 'ingame_asc', 'ingame_desc', 'recently_listed', 'recently_sold', 'last_sale_desc', 'supply_desc', 'supply_asc', 'name_asc'];
+const ALLOWED_VIEWS = ['grid', 'table'];
+
 let allItems = [];
 let filteredItems = [];
-let currentFilter = 'all';
+let currentFilter = getSavedPreference('sfl_filter', 'all', ALLOWED_FILTERS);
 let currentSearch = '';
-let currentSort = 'price_asc';
-let currentView = 'grid';
+let currentSort = getSavedPreference('sfl_sort', 'price_asc', ALLOWED_SORTS);
+let currentView = getSavedPreference('sfl_view', 'grid', ALLOWED_VIEWS);
 let isLoading = false;
 let flowerUsdcRate = 0.19009181;
 let customApiKey = localStorage.getItem('opensea_api_key') || 'add815580a904473ba7f162c0ccc4926';
@@ -812,39 +833,51 @@ document.querySelectorAll('.filter-pill').forEach(btn => {
     document.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     currentFilter = btn.dataset.filter;
+    savePreference('sfl_filter', currentFilter);
     applyFiltersAndSort();
   });
 });
 
 // Sort select
-sortSelect.addEventListener('change', (e) => {
-  currentSort = e.target.value;
-  applyFiltersAndSort();
-});
+if (sortSelect) {
+  sortSelect.addEventListener('change', (e) => {
+    currentSort = e.target.value;
+    savePreference('sfl_sort', currentSort);
+    applyFiltersAndSort();
+  });
+}
 
 // View mode toggle
-viewGridBtn.addEventListener('click', () => {
-  currentView = 'grid';
-  viewGridBtn.classList.add('bg-slate-800', 'text-amber-400');
-  viewGridBtn.classList.remove('text-slate-400');
-  viewTableBtn.classList.remove('bg-slate-800', 'text-amber-400');
-  viewTableBtn.classList.add('text-slate-400');
-  renderItems();
-});
+if (viewGridBtn) {
+  viewGridBtn.addEventListener('click', () => {
+    currentView = 'grid';
+    savePreference('sfl_view', 'grid');
+    viewGridBtn.classList.add('bg-slate-800', 'text-amber-400');
+    viewGridBtn.classList.remove('text-slate-400');
+    viewTableBtn.classList.remove('bg-slate-800', 'text-amber-400');
+    viewTableBtn.classList.add('text-slate-400');
+    renderItems();
+  });
+}
 
-viewTableBtn.addEventListener('click', () => {
-  currentView = 'table';
-  viewTableBtn.classList.add('bg-slate-800', 'text-amber-400');
-  viewTableBtn.classList.remove('text-slate-400');
-  viewGridBtn.classList.remove('bg-slate-800', 'text-amber-400');
-  viewGridBtn.classList.add('text-slate-400');
-  renderItems();
-});
+if (viewTableBtn) {
+  viewTableBtn.addEventListener('click', () => {
+    currentView = 'table';
+    savePreference('sfl_view', 'table');
+    viewTableBtn.classList.add('bg-slate-800', 'text-amber-400');
+    viewTableBtn.classList.remove('text-slate-400');
+    viewGridBtn.classList.remove('bg-slate-800', 'text-amber-400');
+    viewGridBtn.classList.add('text-slate-400');
+    renderItems();
+  });
+}
 
 // Refresh button
-refreshBtn.addEventListener('click', () => {
-  loadData(true);
-});
+if (refreshBtn) {
+  refreshBtn.addEventListener('click', () => {
+    loadData(true);
+  });
+}
 
 // Reset filters
 if (resetFiltersBtn) {
@@ -856,9 +889,51 @@ if (resetFiltersBtn) {
     document.querySelector('[data-filter="all"]')?.classList.add('active');
     currentFilter = 'all';
     currentSort = 'price_asc';
-    sortSelect.value = 'price_asc';
+    if (sortSelect) sortSelect.value = 'price_asc';
+    savePreference('sfl_filter', 'all');
+    savePreference('sfl_sort', 'price_asc');
     applyFiltersAndSort();
   });
+}
+
+/**
+ * Synchronize UI controls (filter pills, sort dropdown, grid/table view buttons) with current user preferences
+ */
+function syncUiPreferences() {
+  // Sync filter pill buttons
+  document.querySelectorAll('.filter-pill').forEach(btn => {
+    if (btn.dataset.filter === currentFilter) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+
+  // Sync sort select dropdown
+  if (sortSelect) {
+    sortSelect.value = currentSort;
+  }
+
+  // Sync view toggle buttons
+  if (currentView === 'table') {
+    if (viewTableBtn) {
+      viewTableBtn.classList.add('bg-slate-800', 'text-amber-400');
+      viewTableBtn.classList.remove('text-slate-400');
+    }
+    if (viewGridBtn) {
+      viewGridBtn.classList.remove('bg-slate-800', 'text-amber-400');
+      viewGridBtn.classList.add('text-slate-400');
+    }
+  } else {
+    if (viewGridBtn) {
+      viewGridBtn.classList.add('bg-slate-800', 'text-amber-400');
+      viewGridBtn.classList.remove('text-slate-400');
+    }
+    if (viewTableBtn) {
+      viewTableBtn.classList.remove('bg-slate-800', 'text-amber-400');
+      viewTableBtn.classList.add('text-slate-400');
+    }
+  }
 }
 
 // Settings Modal
@@ -918,6 +993,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if (window.lucide) {
     lucide.createIcons();
   }
+
+  // Restore saved UI preferences (filter, sort dropdown, view mode)
+  syncUiPreferences();
 
   // 1. Instant display if pre-bundled data exists (zero delay)
   if (window.INITIAL_COLLECTIBLES_DATA && window.INITIAL_COLLECTIBLES_DATA.items && window.INITIAL_COLLECTIBLES_DATA.items.length > 0) {
