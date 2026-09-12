@@ -49,7 +49,7 @@ async function fetchExchangeRate() {
   console.log('🌸 Fetching live Flower token exchange rate...');
   try {
     const data = await fetchWithRetry('https://sfl.world/api/v1.1/exchange');
-    const rate = data?.data?.sfl?.usd || 0.195;
+    const rate = data?.sfl?.usd || data?.data?.sfl?.usd || 0.19009181;
     console.log(`✅ Live Rate: 1 FLOWER ≈ $${rate.toFixed(4)} USDC`);
     fs.writeFileSync(path.join(ROOT_DIR, 'data', 'exchange.json'), JSON.stringify(data, null, 2), 'utf8');
     return rate;
