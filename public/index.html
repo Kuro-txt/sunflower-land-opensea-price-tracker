@@ -76,7 +76,7 @@
     
     <!-- Stats Banner -->
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <!-- Floor Price -->
+      <!-- OpenSea Floor -->
       <div class="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-5 relative overflow-hidden group hover:border-amber-500/40 transition">
         <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider mb-2">
           <span>OpenSea Floor</span>
@@ -93,51 +93,51 @@
         </p>
       </div>
 
-      <!-- Total Items -->
+      <!-- Flower Token Rate (USDC) -->
       <div class="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-5 relative overflow-hidden group hover:border-emerald-500/40 transition">
         <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider mb-2">
-          <span>Tracked Collectibles</span>
+          <span>Flower Token (FLOWER)</span>
           <span class="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400">
-            <i data-lucide="layers" class="w-4 h-4"></i>
+            🌸
           </span>
         </div>
         <div class="flex items-baseline space-x-2">
-          <span id="statTotalItems" class="text-3xl font-extrabold text-white tracking-tight">--</span>
-          <span class="text-xs font-medium text-slate-400">collectibles</span>
+          <span id="statFlowerRate" class="text-3xl font-extrabold text-white tracking-tight">--</span>
+          <span class="text-xs font-bold text-emerald-400">USDC</span>
         </div>
         <p class="text-[11px] text-slate-500 mt-2">
-          <span id="statBoostCount">--</span> with in-game utility boost
+          In-game Currency Rate (sfl.world)
         </p>
       </div>
 
-      <!-- Median Price -->
-      <div class="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-5 relative overflow-hidden group hover:border-blue-500/40 transition">
-        <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider mb-2">
-          <span>Median Price</span>
-          <span class="p-1.5 rounded-lg bg-blue-500/10 text-blue-400">
-            <i data-lucide="bar-chart-2" class="w-4 h-4"></i>
-          </span>
-        </div>
-        <div class="flex items-baseline space-x-2">
-          <span id="statMedian" class="text-3xl font-extrabold text-white tracking-tight">--</span>
-          <span class="text-xs font-bold text-blue-400">WETH</span>
-        </div>
-        <p class="text-[11px] text-slate-500 mt-2">
-          Average: <span id="statAvg">--</span> WETH
-        </p>
-      </div>
-
-      <!-- Data Source / Status -->
+      <!-- In-Game Marketplace -->
       <div class="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-5 relative overflow-hidden group hover:border-purple-500/40 transition">
         <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider mb-2">
-          <span>Data Provider</span>
+          <span>In-Game Market</span>
           <span class="p-1.5 rounded-lg bg-purple-500/10 text-purple-400">
+            <i data-lucide="shopping-bag" class="w-4 h-4"></i>
+          </span>
+        </div>
+        <div class="flex items-baseline space-x-2">
+          <span id="statInGameCount" class="text-3xl font-extrabold text-white tracking-tight">--</span>
+          <span class="text-xs font-medium text-slate-400">listed items</span>
+        </div>
+        <p class="text-[11px] text-slate-500 mt-2">
+          Total items: <span id="statTotalItems">--</span> (<span id="statBoostCount">--</span> boosts)
+        </p>
+      </div>
+
+      <!-- Data Status -->
+      <div class="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-5 relative overflow-hidden group hover:border-blue-500/40 transition">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider mb-2">
+          <span>Markets Connected</span>
+          <span class="p-1.5 rounded-lg bg-blue-500/10 text-blue-400">
             <i data-lucide="activity" class="w-4 h-4"></i>
           </span>
         </div>
         <div class="flex items-center space-x-2">
           <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-          <span id="statProvider" class="text-sm font-bold text-white truncate">Connected</span>
+          <span id="statProvider" class="text-sm font-bold text-white truncate">OpenSea + In-Game</span>
         </div>
         <p class="text-[11px] text-slate-500 mt-2 truncate">
           Updated: <span id="statLastUpdated">Just now</span>
@@ -167,9 +167,12 @@
           <!-- Sort Dropdown -->
           <div class="relative">
             <select id="sortSelect" class="appearance-none bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 pr-8 text-xs font-medium text-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500/50 cursor-pointer">
-              <option value="price_asc">Price: Low to High</option>
-              <option value="price_desc">Price: High to Low</option>
-              <option value="recently_sold">🔥 Recently Sold</option>
+              <option value="price_asc">OpenSea: Low to High</option>
+              <option value="price_desc">OpenSea: High to Low</option>
+              <option value="ingame_asc">In-Game: Low to High (🌸 FLOWER)</option>
+              <option value="ingame_desc">In-Game: High to Low (🌸 FLOWER)</option>
+              <option value="recently_listed">⚡ Recently Listed (OpenSea)</option>
+              <option value="recently_sold">🔥 Recently Sold (OpenSea)</option>
               <option value="last_sale_desc">Last Sale: Highest</option>
               <option value="supply_desc">Supply: Most Common</option>
               <option value="supply_asc">Supply: Most Rare</option>
@@ -194,7 +197,9 @@
       <div class="flex items-center gap-2 overflow-x-auto pb-1 text-xs no-scrollbar">
         <span class="text-slate-500 font-medium whitespace-nowrap mr-1">Filter:</span>
         <button data-filter="all" class="filter-pill active">All Items</button>
+        <button data-filter="recently-listed" class="filter-pill">⚡ Recently Listed</button>
         <button data-filter="recently-sold" class="filter-pill">🔥 Recently Sold</button>
+        <button data-filter="ingame" class="filter-pill">🎮 In-Game Listed</button>
         <button data-filter="boost" class="filter-pill">⚡ With Boosts</button>
         <button data-filter="cosmetic" class="filter-pill">🎨 Cosmetic Only</button>
         <button data-filter="tier-cheap" class="filter-pill">🪙 &lt; 0.0005 WETH</button>
@@ -210,8 +215,8 @@
         Showing <span id="filteredCount" class="font-bold text-white">0</span> of <span id="totalCount" class="font-bold text-white">0</span> items
       </div>
       <div class="flex items-center space-x-2">
-        <span class="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>
-        <span>Prices in WETH from OpenSea Official API</span>
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span>OpenSea (WETH) &amp; In-Game Marketplace (🌸 FLOWER / USDC)</span>
       </div>
     </div>
 
@@ -240,10 +245,11 @@
               <th scope="col" class="py-3.5 px-4 font-semibold">ID</th>
               <th scope="col" class="py-3.5 px-4 font-semibold">Collectible</th>
               <th scope="col" class="py-3.5 px-4 font-semibold">Utility Boost</th>
-              <th scope="col" class="py-3.5 px-4 font-semibold text-right">Floor Price</th>
-              <th scope="col" class="py-3.5 px-4 font-semibold text-right">Last Sale</th>
+              <th scope="col" class="py-3.5 px-4 font-semibold text-right">OpenSea Floor</th>
+              <th scope="col" class="py-3.5 px-4 font-semibold text-right">In-Game Floor</th>
+              <th scope="col" class="py-3.5 px-4 font-semibold text-right">Last Sold</th>
               <th scope="col" class="py-3.5 px-4 font-semibold text-right">Supply</th>
-              <th scope="col" class="py-3.5 px-4 font-semibold text-center">OpenSea</th>
+              <th scope="col" class="py-3.5 px-4 font-semibold text-center">Marketplace</th>
             </tr>
           </thead>
           <tbody id="itemsTableBody" class="divide-y divide-slate-800/60">
