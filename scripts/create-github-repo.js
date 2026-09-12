@@ -172,6 +172,40 @@ async function main() {
     }
   }
 
+  // Check and delete remote obsolete/junk files that no longer exist locally
+  const localFilePaths = new Set(files.map(f => f.path));
+  console.log('\n🧹 Checking for remote junk and obsolete files to remove...');
+  try {
+    const treeRes = await githubRequest(`https://api.github.com/repos/${username}/${REPO_NAME}/git/trees/${repo.default_branch || 'main'}?recursive=1`);
+    if (treeRes.status === 200 && treeRes.data?.tree) {
+      for (const item of treeRes.data.tree) {
+        if (item.type !== 'blob') continue;
+        if (!localFilePaths.has(item.path) && !item.path.startsWith('.github/')) {
+          process.stdout.write(`  🗑️ Deleting remote junk: ${item.path}... `);
+          try {
+            const delRes = await githubRequest(`https://api.github.com/repos/${username}/${REPO_NAME}/contents/${item.path}`, {
+              method: 'DELETE',
+              body: JSON.stringify({
+                message: `chore: remove obsolete file ${item.path}`,
+                sha: item.sha,
+                branch: repo.default_branch || 'main'
+              })
+            });
+            if (delRes.status === 200) {
+              console.log('✅ Removed');
+            } else {
+              console.log(`⚠️ (Status ${delRes.status})`);
+            }
+          } catch (delErr) {
+            console.log(`❌ ${delErr.message}`);
+          }
+        }
+      }
+    }
+  } catch (cleanErr) {
+    console.warn('Could not clean remote files:', cleanErr.message);
+  }
+
   // Enable / check GitHub Pages
   let pagesUrl = `https://${username}.github.io/${REPO_NAME}/`;
   try {
