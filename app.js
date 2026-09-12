@@ -18,8 +18,8 @@ function savePreference(key, value) {
   } catch {}
 }
 
-const ALLOWED_FILTERS = ['all', 'boost', 'without-boost', 'no-boost', 'recently-listed', 'cosmetic'];
-const ALLOWED_SORTS = ['price_asc', 'price_desc', 'ingame_asc', 'ingame_desc', 'diff_desc', 'recently_listed', 'recently_sold', 'last_sale_desc', 'supply_desc', 'supply_asc', 'name_asc'];
+const ALLOWED_FILTERS = ['all', 'diff', 'boost', 'without-boost', 'no-boost', 'recently-listed', 'cosmetic'];
+const ALLOWED_SORTS = ['diff_desc', 'diff_asc', 'price_asc', 'price_desc', 'ingame_asc', 'ingame_desc', 'recently_listed', 'recently_sold', 'last_sale_desc', 'supply_desc', 'supply_asc', 'name_asc'];
 const ALLOWED_VIEWS = ['grid', 'table'];
 
 let allItems = [];
@@ -212,6 +212,100 @@ function computeClientStats(items, provider = 'OpenSea + In-Game', lastUpdated =
 }
 
 /**
+/**
+ * Resource token check for Sunflower Land ERC-1155 contract
+ * Resources have 18 decimals in the contract, whereas collectibles have 0 decimals.
+ */
+function isResourceToken(id) {
+  const num = Number(id);
+  return (num >= 201 && num <= 220) || (num >= 601 && num <= 605) || (num >= 301 && num <= 304);
+}
+
+// In-memory cache for live verified floors to prevent redundant OpenSea queries
+const liveFloorCache = new Map();
+let isFetchingLiveFloors = false;
+
+/**
+ * On-demand live floor verification for currently visible items
+ * Directly fetches official OpenSea /nfts/{id}/best endpoint in real time
+ */
+async function refreshVisibleItemFloors(items) {
+  if (!items || !items.length || isFetchingLiveFloors) return;
+  const apiKey = customApiKey || localStorage.getItem('opensea_api_key') || 'add815580a904473ba7f162c0ccc4926';
+  if (!apiKey) return;
+
+  const now = Date.now();
+  const toCheck = items.filter(it => {
+    const cached = liveFloorCache.get(it.id);
+    return !cached || (now - cached.timestamp > 90000);
+  }).slice(0, 16);
+
+  if (!toCheck.length) return;
+  isFetchingLiveFloors = true;
+
+  try {
+    const headers = { 'x-api-key': apiKey, 'accept': 'application/json' };
+    let hasChanges = false;
+
+    for (let i = 0; i < toCheck.length; i += 3) {
+      const chunk = toCheck.slice(i, i + 3);
+      await Promise.all(chunk.map(async (item) => {
+        try {
+          const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/nfts/${item.id}/best`, { headers });
+          if (res.status === 404) {
+            liveFloorCache.set(item.id, { price: 0, unlisted: true, timestamp: Date.now() });
+            if (!item.unlisted) {
+              item.unlisted = true;
+              hasChanges = true;
+            }
+            return;
+          }
+          if (!res.ok) return;
+          const data = await res.json();
+          const cur = data.price?.current?.currency || 'WETH';
+          const dec = data.price?.current?.decimals != null ? data.price.current.decimals : 18;
+          const totalVal = data.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
+          const offer = data.protocol_data?.parameters?.offer?.[0];
+          const startAmount = Number(offer?.startAmount || '1');
+
+          let unitPrice = totalVal;
+          if (isResourceToken(item.id)) {
+            if (startAmount < 1e18) return; // ignore micro-dust orders
+            unitPrice = totalVal / (startAmount / 1e18);
+          } else {
+            unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
+          }
+
+          if (unitPrice > 0 && unitPrice >= 0.00001) {
+            liveFloorCache.set(item.id, { price: unitPrice, currency: cur, timestamp: Date.now() });
+            if (item.rawPrice !== unitPrice || item.unlisted) {
+              item.rawPrice = unitPrice;
+              item.floorPrice = unitPrice;
+              item.currency = cur;
+              item.unlisted = false;
+              hasChanges = true;
+            }
+          }
+        } catch {}
+      }));
+    }
+
+    if (hasChanges) {
+      computeClientStats(allItems, 'OpenSea Live Verified (Real-Time)', new Date(), flowerUsdcRate);
+      renderItems(false);
+      const syncStatusText = document.getElementById('syncStatusText');
+      if (syncStatusText) {
+        syncStatusText.textContent = `⚡ Live OpenSea Verified (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
+      }
+    }
+  } catch (err) {
+    console.warn('Live floor check notice:', err);
+  } finally {
+    isFetchingLiveFloors = false;
+  }
+}
+
+/**
  * Fetch live fresh listings & events directly from OpenSea API v2 in real-time
  */
 async function fetchLiveOpenSeaUpdates() {
@@ -224,10 +318,9 @@ async function fetchLiveOpenSeaUpdates() {
       'accept': 'application/json'
     };
 
-    const [listingEventsRes, saleEventsRes, bestListingsRes] = await Promise.all([
+    const [listingEventsRes, saleEventsRes] = await Promise.all([
       fetch('https://api.opensea.io/api/v2/events/collection/sunflower-land-collectibles?event_type=listing&limit=50', { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch('https://api.opensea.io/api/v2/events/collection/sunflower-land-collectibles?event_type=sale&limit=50', { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch('https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/best?limit=50', { headers }).then(r => r.ok ? r.json() : null).catch(() => null)
+      fetch('https://api.opensea.io/api/v2/events/collection/sunflower-land-collectibles?event_type=sale&limit=50', { headers }).then(r => r.ok ? r.json() : null).catch(() => null)
     ]);
 
     let updatedCount = 0;
@@ -247,12 +340,14 @@ async function fetchLiveOpenSeaUpdates() {
             target.lastListedTimestamp = ts;
             target.lastListedPrice = price;
           }
-          if (target.unlisted && price > 0) {
+          // Update price if valid and not dust
+          if (price > 0 && price >= 0.00001 && (!isResourceToken(id) || price < 100)) {
             target.unlisted = false;
             target.rawPrice = price;
             target.floorPrice = price;
+            target.currency = ev.payment?.symbol || 'WETH';
+            updatedCount++;
           }
-          updatedCount++;
         }
       }
     }
@@ -272,31 +367,8 @@ async function fetchLiveOpenSeaUpdates() {
             target.lastSaleTimestamp = ts;
             target.lastSalePrice = price;
             target.lastSaleCurrency = ev.payment?.symbol || 'WETH';
+            updatedCount++;
           }
-          updatedCount++;
-        }
-      }
-    }
-
-    // 3. Process live best floor listings
-    if (bestListingsRes?.listings) {
-      for (const l of bestListingsRes.listings) {
-        const offer = l.protocol_data?.parameters?.offer?.[0];
-        const id = parseInt(offer?.identifierOrCriteria, 10);
-        if (!id) continue;
-        const target = allItems.find(i => i.id === id);
-        if (target) {
-          const dec = l.price?.current?.decimals != null ? l.price.current.decimals : 18;
-          const totalVal = l.price?.current?.value ? (Number(l.price.current.value) / Math.pow(10, dec)) : 0;
-          const startAmount = Number(offer?.startAmount || '1');
-          const unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
-          if (unitPrice > 0) {
-            target.unlisted = false;
-            target.rawPrice = unitPrice;
-            target.floorPrice = unitPrice;
-            target.currency = l.price?.current?.currency || 'WETH';
-          }
-          updatedCount++;
         }
       }
     }
@@ -482,7 +554,13 @@ function applyFiltersAndSort() {
   }
 
   // 2. Category Filter
-  if (currentFilter === 'boost') {
+  if (currentFilter === 'diff') {
+    result = result.filter(item => {
+      const isListed = !item.unlisted && ((item.rawPrice && item.rawPrice > 0) || (item.floorPrice && item.floorPrice > 0));
+      const hasInGame = item.inGameFloor && item.inGameFloor > 0;
+      return isListed && hasInGame;
+    });
+  } else if (currentFilter === 'boost') {
     result = result.filter(item => item.haveBoost);
   } else if (currentFilter === 'without-boost' || currentFilter === 'no-boost' || currentFilter === 'cosmetic') {
     result = result.filter(item => !item.haveBoost);
@@ -504,7 +582,31 @@ function applyFiltersAndSort() {
   }
 
   // 3. Sorting
-  if (currentSort === 'recently_listed') {
+  if (currentSort === 'diff_desc') {
+    result.sort((a, b) => {
+      const aOS = (!a.unlisted && (a.rawPrice || a.floorPrice)) ? (((a.rawPrice || a.floorPrice) * ethUsdPrice) / (flowerUsdcRate || 1)) : null;
+      const aGame = (a.inGameFloor && a.inGameFloor > 0) ? (a.inGameFloor * 0.9) : null;
+      const aDiff = (aOS !== null && aGame !== null) ? (aGame - aOS) : -999999999;
+
+      const bOS = (!b.unlisted && (b.rawPrice || b.floorPrice)) ? (((b.rawPrice || b.floorPrice) * ethUsdPrice) / (flowerUsdcRate || 1)) : null;
+      const bGame = (b.inGameFloor && b.inGameFloor > 0) ? (b.inGameFloor * 0.9) : null;
+      const bDiff = (bOS !== null && bGame !== null) ? (bGame - bOS) : -999999999;
+
+      return bDiff - aDiff;
+    });
+  } else if (currentSort === 'diff_asc') {
+    result.sort((a, b) => {
+      const aOS = (!a.unlisted && (a.rawPrice || a.floorPrice)) ? (((a.rawPrice || a.floorPrice) * ethUsdPrice) / (flowerUsdcRate || 1)) : null;
+      const aGame = (a.inGameFloor && a.inGameFloor > 0) ? (a.inGameFloor * 0.9) : null;
+      const aDiff = (aOS !== null && aGame !== null) ? (aGame - aOS) : 999999999;
+
+      const bOS = (!b.unlisted && (b.rawPrice || b.floorPrice)) ? (((b.rawPrice || b.floorPrice) * ethUsdPrice) / (flowerUsdcRate || 1)) : null;
+      const bGame = (b.inGameFloor && b.inGameFloor > 0) ? (b.inGameFloor * 0.9) : null;
+      const bDiff = (bOS !== null && bGame !== null) ? (bGame - bOS) : 999999999;
+
+      return aDiff - bDiff;
+    });
+  } else if (currentSort === 'recently_listed') {
     result.sort((a, b) => {
       if (a.recentlyListed && !b.recentlyListed) return -1;
       if (!a.recentlyListed && b.recentlyListed) return 1;
@@ -529,18 +631,6 @@ function applyFiltersAndSort() {
     });
   } else if (currentSort === 'ingame_desc') {
     result.sort((a, b) => (b.inGameFloor || 0) - (a.inGameFloor || 0));
-  } else if (currentSort === 'diff_desc') {
-    result.sort((a, b) => {
-      const aOS = (!a.unlisted && (a.rawPrice || a.floorPrice)) ? (((a.rawPrice || a.floorPrice) * ethUsdPrice) / (flowerUsdcRate || 1)) : null;
-      const aGame = (a.inGameFloor && a.inGameFloor > 0) ? (a.inGameFloor * 0.9) : null;
-      const aDiff = (aOS !== null && aGame !== null) ? (aOS - aGame) : -999999999;
-
-      const bOS = (!b.unlisted && (b.rawPrice || b.floorPrice)) ? (((b.rawPrice || b.floorPrice) * ethUsdPrice) / (flowerUsdcRate || 1)) : null;
-      const bGame = (b.inGameFloor && b.inGameFloor > 0) ? (b.inGameFloor * 0.9) : null;
-      const bDiff = (bOS !== null && bGame !== null) ? (bOS - bGame) : -999999999;
-
-      return bDiff - aDiff;
-    });
   } else if (currentSort === 'last_sale_desc') {
     result.sort((a, b) => (b.lastSalePrice || 0) - (a.lastSalePrice || 0));
   } else if (currentSort === 'price_asc') {
@@ -572,7 +662,7 @@ function applyFiltersAndSort() {
 /**
  * Render items in current view mode
  */
-function renderItems() {
+function renderItems(checkLive = true) {
   if (filteredItems.length === 0) {
     itemsGrid.classList.add('hidden');
     itemsTableContainer.classList.add('hidden');
@@ -594,6 +684,10 @@ function renderItems() {
 
   if (window.lucide) {
     lucide.createIcons();
+  }
+
+  if (checkLive && filteredItems.length > 0) {
+    refreshVisibleItemFloors(filteredItems.slice(0, 16));
   }
 }
 
@@ -964,6 +1058,13 @@ document.querySelectorAll('.filter-pill').forEach(btn => {
     document.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     currentFilter = btn.dataset.filter;
+    if (currentFilter === 'diff') {
+      if (currentSort !== 'diff_desc' && currentSort !== 'diff_asc') {
+        currentSort = 'diff_desc';
+        if (sortSelect) sortSelect.value = 'diff_desc';
+        savePreference('sfl_sort', 'diff_desc');
+      }
+    }
     savePreference('sfl_filter', currentFilter);
     applyFiltersAndSort();
   });
@@ -1003,10 +1104,11 @@ if (viewTableBtn) {
   });
 }
 
-// Refresh button
+// Refresh button (forces complete real-time sync across OpenSea + In-Game)
 if (refreshBtn) {
   refreshBtn.addEventListener('click', () => {
-    loadData(true);
+    liveFloorCache.clear();
+    syncAllDataOnWebOpen(true);
   });
 }
 
@@ -1103,7 +1205,7 @@ if (openSettingsBtn && settingsModal) {
       }
 
       settingsModal.classList.add('hidden');
-      loadData(true);
+      syncAllDataOnWebOpen(true);
     });
   }
 }
