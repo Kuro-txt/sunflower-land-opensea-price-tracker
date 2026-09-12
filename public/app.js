@@ -56,10 +56,26 @@ const openseaApiKeyInput = document.getElementById('openseaApiKeyInput');
  */
 function formatCryptoPrice(num) {
   if (num === null || num === undefined || isNaN(num) || num <= 0) return 'Unlisted';
-  if (num < 0.000001) return num.toExponential(2);
+  if (num < 0.000001) return '<0.0001';
+  if (num < 0.0001) return num.toFixed(6);
   if (num < 0.001) return num.toFixed(5);
   if (num < 1) return num.toFixed(4);
   return num.toLocaleString(undefined, { maximumFractionDigits: 3 });
+}
+
+/**
+ * Format relative time ago for listing/sale timestamps
+ */
+function formatTimeAgo(timestampMs) {
+  if (!timestampMs) return '';
+  const diffSec = Math.floor((Date.now() - timestampMs) / 1000);
+  if (diffSec < 60) return 'Just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHrs = Math.floor(diffMin / 60);
+  if (diffHrs < 24) return `${diffHrs}h ago`;
+  const diffDays = Math.floor(diffHrs / 24);
+  return `${diffDays}d ago`;
 }
 
 /**
@@ -215,9 +231,9 @@ function applyFiltersAndSort() {
 
   // 2. Category Filter
   if (currentFilter === 'recently-listed') {
-    result = result.filter(item => item.recentlyListed || (item.orderCreatedAt && item.orderCreatedAt > 0));
+    result = result.filter(item => item.recentlyListed);
   } else if (currentFilter === 'recently-sold') {
-    result = result.filter(item => item.recentlySold || (item.lastSalePrice && item.lastSalePrice > 0));
+    result = result.filter(item => item.recentlySold);
   } else if (currentFilter === 'ingame') {
     result = result.filter(item => item.inGameFloor && item.inGameFloor > 0);
   } else if (currentFilter === 'boost') {
@@ -236,9 +252,17 @@ function applyFiltersAndSort() {
 
   // 3. Sorting
   if (currentSort === 'recently_listed') {
-    result.sort((a, b) => (b.orderCreatedAt || 0) - (a.orderCreatedAt || 0));
+    result.sort((a, b) => {
+      if (a.recentlyListed && !b.recentlyListed) return -1;
+      if (!a.recentlyListed && b.recentlyListed) return 1;
+      const aTime = a.lastListedTimestamp || (a.orderCreatedAt ? a.orderCreatedAt * 1000 : 0);
+      const bTime = b.lastListedTimestamp || (b.orderCreatedAt ? b.orderCreatedAt * 1000 : 0);
+      return bTime - aTime;
+    });
   } else if (currentSort === 'recently_sold') {
     result.sort((a, b) => {
+      if (a.recentlySold && !b.recentlySold) return -1;
+      if (!a.recentlySold && b.recentlySold) return 1;
       const aTime = a.lastSaleTimestamp || 0;
       const bTime = b.lastSaleTimestamp || 0;
       if (bTime !== aTime) return bTime - aTime;
@@ -345,9 +369,10 @@ function renderGridView() {
         </span>`
       : '';
 
+    const listedAgo = item.lastListedTimestamp ? formatTimeAgo(item.lastListedTimestamp) : '';
     const recentListedBadge = item.recentlyListed
-      ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30">
-          <span>⚡ Listed</span>
+      ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30" title="Listed ${listedAgo || 'recently'} on OpenSea">
+          <span>⚡ Listed ${listedAgo ? `(${listedAgo})` : ''}</span>
         </span>`
       : '';
 
@@ -471,8 +496,9 @@ function renderTableView() {
       ? `<span class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">🔥 Sold</span>`
       : '';
 
+    const listedAgo = item.lastListedTimestamp ? formatTimeAgo(item.lastListedTimestamp) : '';
     const recentListedBadge = item.recentlyListed
-      ? `<span class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30">⚡ Listed</span>`
+      ? `<span class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30" title="Listed ${listedAgo || 'recently'} on OpenSea">⚡ Listed ${listedAgo ? `(${listedAgo})` : ''}</span>`
       : '';
 
     return `
