@@ -57,11 +57,6 @@
           <span>OpenSea Collection</span>
         </a>
 
-        <!-- Settings Button -->
-        <button id="openSettingsBtn" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition" title="API Settings">
-          <i data-lucide="settings" class="w-4 h-4"></i>
-        </button>
-
         <!-- Refresh Button -->
         <button id="refreshBtn" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md shadow-amber-500/20 transition active:scale-95">
           <i data-lucide="refresh-cw" id="refreshIcon" class="w-3.5 h-3.5"></i>
@@ -75,24 +70,7 @@
   <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
     
     <!-- Stats Banner -->
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <!-- OpenSea Floor -->
-      <div class="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-5 relative overflow-hidden group hover:border-amber-500/40 transition">
-        <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider mb-2">
-          <span>OpenSea Floor</span>
-          <span class="p-1.5 rounded-lg bg-amber-500/10 text-amber-400">
-            <i data-lucide="trending-up" class="w-4 h-4"></i>
-          </span>
-        </div>
-        <div class="flex items-baseline space-x-2">
-          <span id="statFloor" class="text-3xl font-extrabold text-white tracking-tight">--</span>
-          <span class="text-xs font-bold text-blue-400">WETH</span>
-        </div>
-        <p class="text-[11px] text-slate-500 mt-2 flex items-center space-x-1">
-          <span>Lowest active OpenSea listing</span>
-        </p>
-      </div>
-
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
       <!-- Flower Token Rate (USDC) -->
       <div class="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-5 relative overflow-hidden group hover:border-emerald-500/40 transition">
         <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider mb-2">
@@ -265,55 +243,6 @@
 
   </main>
 
-  <!-- Settings Modal -->
-  <div id="settingsModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
-    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center space-x-2.5">
-          <i data-lucide="settings" class="w-5 h-5 text-amber-400"></i>
-          <h3 class="text-base font-bold text-white">API & Configuration</h3>
-        </div>
-        <button id="closeSettingsBtn" class="text-slate-400 hover:text-white">
-          <i data-lucide="x" class="w-5 h-5"></i>
-        </button>
-      </div>
-
-      <div class="space-y-4 text-xs">
-        <div>
-          <label class="block font-medium text-slate-300 mb-1.5">Optional OpenSea API Key</label>
-          <input 
-            type="password" 
-            id="openseaApiKeyInput" 
-            placeholder="Enter OpenSea API key (optional)..."
-            class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-600 focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 outline-none"
-          />
-          <p class="text-[11px] text-slate-400 mt-1.5">
-            By default, live prices are served seamlessly via the GitHub Pages static data feed. If you have an OpenSea API key, save it here to query OpenSea API v2 directly.
-          </p>
-        </div>
-
-        <div class="bg-slate-950/60 rounded-xl p-3 border border-slate-800/80 space-y-1.5 text-slate-400 text-[11px]">
-          <div class="flex justify-between">
-            <span>Collection:</span>
-            <span class="text-slate-200 font-mono">sunflower-land-collectibles</span>
-          </div>
-          <div class="flex justify-between">
-            <span>Contract:</span>
-            <span class="text-slate-200 font-mono">0x22d5...d742 (Polygon)</span>
-          </div>
-          <div class="flex justify-between">
-            <span>Hosting:</span>
-            <span class="text-emerald-400">GitHub Pages</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="flex justify-end space-x-3 pt-2">
-        <button id="cancelSettingsBtn" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium text-xs transition">Cancel</button>
-        <button id="saveSettingsBtn" class="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs transition">Save Settings</button>
-      </div>
-    </div>
-  </div>
 
   <!-- Footer -->
   <footer class="border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-500">
