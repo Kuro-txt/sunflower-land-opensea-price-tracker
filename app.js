@@ -268,51 +268,152 @@ async function fetchLiveOpenSeaUpdates() {
 }
 
 /**
- * Load Data from pre-bundled snapshot and live API
+ * Automatically sync all 3 data feeds:
+ * 1. data/prices.json (Full catalog with floor prices & metadata)
+ * 2. data/exchange.json (Live SFL/Flower token exchange rate)
+ * 3. data/ingame_nfts.json (SFL In-game marketplace items)
+ * Concurrently with live DEX rate & OpenSea API v2 updates
  */
-async function loadData(forceRefresh = false) {
-  showLoading(true);
-  try {
-    let loaded = false;
+async function syncAllDataOnWebOpen(forceRefresh = false) {
+  const syncStatusText = document.getElementById('syncStatusText');
+  const syncDot = document.getElementById('syncDot');
+  if (syncStatusText) {
+    syncStatusText.textContent = 'Syncing data feeds (Prices, Exchange, In-Game)...';
+  }
+  if (syncDot) {
+    syncDot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping';
+  }
 
-    // 1. If we have bundled data and not forcing a live network refresh, use it instantly
-    if (!forceRefresh && window.INITIAL_COLLECTIBLES_DATA && window.INITIAL_COLLECTIBLES_DATA.items) {
-      allItems = window.INITIAL_COLLECTIBLES_DATA.items;
-      flowerUsdcRate = window.INITIAL_COLLECTIBLES_DATA.flowerUsdcRate || flowerUsdcRate;
-      computeClientStats(allItems, 'OpenSea + In-Game (Verified)', window.INITIAL_COLLECTIBLES_DATA.lastUpdated, flowerUsdcRate);
-      loaded = true;
+  try {
+    const timestamp = Date.now();
+
+    // 1. Concurrently fetch all 3 data feeds + live DEX rate
+    const [pricesRes, exchangeRes, inGameRes, dexRes] = await Promise.allSettled([
+      fetch(`./data/prices.json?v=${timestamp}`).then(r => r.ok ? r.json() : null),
+      fetch(`./data/exchange.json?v=${timestamp}`).then(r => r.ok ? r.json() : null),
+      fetch(`./data/ingame_nfts.json?v=${timestamp}`).then(r => r.ok ? r.json() : null),
+      fetch('https://api.dexscreener.com/latest/dex/tokens/0xD1f9c58e33933a993A3891F8acFe05a68E1afC05').then(r => r.ok ? r.json() : null).catch(() => null)
+    ]);
+
+    const pricesData = pricesRes.status === 'fulfilled' ? pricesRes.value : null;
+    const exchangeData = exchangeRes.status === 'fulfilled' ? exchangeRes.value : null;
+    const inGameData = inGameRes.status === 'fulfilled' ? inGameRes.value : null;
+    const dexData = dexRes.status === 'fulfilled' ? dexRes.value : null;
+
+    // 2. Parse live Flower / SFL token exchange rate
+    let freshRate = null;
+    if (dexData?.pairs && dexData.pairs.length > 0) {
+      const bestPair = dexData.pairs.find(p => p.priceUsd && Number(p.priceUsd) > 0);
+      if (bestPair) {
+        freshRate = parseFloat(bestPair.priceUsd);
+      }
+    }
+    if (!freshRate && exchangeData) {
+      const sflRate = exchangeData.sfl?.usd || exchangeData.data?.sfl?.usd;
+      if (sflRate && Number(sflRate) > 0) {
+        freshRate = Number(sflRate);
+      }
+    }
+    if (!freshRate && pricesData?.flowerUsdcRate) {
+      freshRate = pricesData.flowerUsdcRate;
+    }
+    if (freshRate && freshRate > 0) {
+      flowerUsdcRate = freshRate;
+      if (statFlowerRate) {
+        statFlowerRate.textContent = '$' + flowerUsdcRate.toFixed(4);
+      }
     }
 
-    // 2. Load latest data/prices.json
-    if (!loaded || forceRefresh) {
-      const res = await fetch('./data/prices.json?v=' + Date.now());
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.items) {
-          allItems = data.items;
-          flowerUsdcRate = data.flowerUsdcRate || flowerUsdcRate;
-          computeClientStats(allItems, data.provider || 'OpenSea + In-Game', data.lastUpdated, flowerUsdcRate);
-          loaded = true;
+    // 3. Parse In-Game marketplace items
+    const inGameMap = new Map();
+    if (inGameData) {
+      const list = inGameData.collectibles || inGameData.data || (Array.isArray(inGameData) ? inGameData : []);
+      for (const item of list) {
+        if (item.id != null) {
+          inGameMap.set(Number(item.id), {
+            floor: item.floor != null ? Number(item.floor) : null,
+            lastSalePrice: item.lastSalePrice != null ? Number(item.lastSalePrice) : null,
+            supply: item.supply != null ? Number(item.supply) : null,
+            name: item.name || '',
+            haveBoost: item.have_boost === 1,
+            boostText: item.boost_text || ''
+          });
         }
       }
     }
 
-    if (!loaded || !allItems.length) {
-      throw new Error('Unable to load OpenSea price data.');
+    // 4. Update Catalog with prices.json or memory fallback
+    if (pricesData && Array.isArray(pricesData.items) && pricesData.items.length > 0) {
+      allItems = pricesData.items;
+    } else if (!allItems.length && window.INITIAL_COLLECTIBLES_DATA?.items) {
+      allItems = window.INITIAL_COLLECTIBLES_DATA.items;
+    }
+
+    if (!allItems.length) {
+      throw new Error('Could not load collectible prices from data feeds.');
+    }
+
+    // 5. Merge In-Game data & live exchange rates into allItems
+    for (const item of allItems) {
+      const inGameInfo = inGameMap.get(item.id);
+      if (inGameInfo) {
+        if (inGameInfo.floor !== null) {
+          item.inGameFloor = inGameInfo.floor;
+          item.inGameFloorUsdc = Number((inGameInfo.floor * flowerUsdcRate).toFixed(4));
+        }
+        if (!item.boostText && inGameInfo.boostText) {
+          item.boostText = inGameInfo.boostText;
+          item.haveBoost = inGameInfo.haveBoost;
+        }
+        if ((!item.name || item.name.startsWith('Sunflower Land #')) && inGameInfo.name) {
+          item.name = inGameInfo.name;
+        }
+        if (inGameInfo.supply && item.supply <= 1) {
+          item.supply = inGameInfo.supply;
+        }
+      } else if (item.inGameFloor && flowerUsdcRate) {
+        item.inGameFloorUsdc = Number((item.inGameFloor * flowerUsdcRate).toFixed(4));
+      }
     }
 
     totalCountEl.textContent = allItems.length;
+    computeClientStats(allItems, 'Auto-Synced (Prices, Exchange & In-Game)', pricesData?.lastUpdated || new Date(), flowerUsdcRate);
     applyFiltersAndSort();
 
-    // 3. Always attempt live OpenSea API update in real-time
-    fetchLiveOpenSeaUpdates();
+    // 6. Concurrently trigger live OpenSea API updates (real-time events & best listings)
+    fetchLiveOpenSeaUpdates().catch(err => console.warn('OpenSea live update notice:', err));
+
+    // 7. Update UI sync status
+    if (syncStatusText) {
+      syncStatusText.textContent = 'Auto-Synced (Prices, Exchange & In-Game)';
+    }
+    if (syncDot) {
+      syncDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse';
+    }
+    errorState.classList.add('hidden');
+    console.log(`✅ Auto-synced 3 feeds: prices.json (${allItems.length} items), exchange.json ($${flowerUsdcRate.toFixed(4)}), ingame_nfts.json (${inGameMap.size} items)`);
   } catch (err) {
-    console.error('Error loading data:', err);
-    errorState.classList.remove('hidden');
-    document.getElementById('errorMessage').textContent = err.message;
+    console.error('Error during auto-sync:', err);
+    if (syncStatusText) {
+      syncStatusText.textContent = 'Sync notice: using cached feeds';
+    }
+    if (syncDot) {
+      syncDot.className = 'w-1.5 h-1.5 rounded-full bg-yellow-400';
+    }
+    if (!allItems.length) {
+      errorState.classList.remove('hidden');
+      document.getElementById('errorMessage').textContent = err.message;
+    }
   } finally {
     showLoading(false);
   }
+}
+
+/**
+ * Backwards compatibility alias for loadData
+ */
+async function loadData(forceRefresh = false) {
+  return syncAllDataOnWebOpen(forceRefresh);
 }
 
 /**
@@ -782,15 +883,22 @@ document.addEventListener('DOMContentLoaded', () => {
     lucide.createIcons();
   }
 
+  // 1. Instant display if pre-bundled data exists (zero delay)
   if (window.INITIAL_COLLECTIBLES_DATA && window.INITIAL_COLLECTIBLES_DATA.items && window.INITIAL_COLLECTIBLES_DATA.items.length > 0) {
     allItems = window.INITIAL_COLLECTIBLES_DATA.items;
     flowerUsdcRate = window.INITIAL_COLLECTIBLES_DATA.flowerUsdcRate || flowerUsdcRate;
     totalCountEl.textContent = allItems.length;
-    computeClientStats(allItems, 'OpenSea + In-Game (Verified)', window.INITIAL_COLLECTIBLES_DATA.lastUpdated, flowerUsdcRate);
+    computeClientStats(allItems, 'OpenSea + In-Game (Initial)', window.INITIAL_COLLECTIBLES_DATA.lastUpdated, flowerUsdcRate);
     applyFiltersAndSort();
-    // Fetch fresh live listings & events directly from OpenSea API
-    fetchLiveOpenSeaUpdates();
   } else {
-    loadData(false);
+    showLoading(true);
   }
+
+  // 2. Automatically sync all 3 feeds (prices.json, exchange.json, ingame_nfts.json) + live APIs on web open!
+  syncAllDataOnWebOpen(true);
+
+  // 3. Keep syncing periodically in the background every 60 seconds
+  setInterval(() => {
+    syncAllDataOnWebOpen(false);
+  }, 60000);
 });
