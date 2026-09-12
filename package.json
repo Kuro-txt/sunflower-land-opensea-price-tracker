@@ -4,9 +4,8 @@
   "description": "Live web dashboard to fetch and track all items price from OpenSea for sunflower-land-collectibles",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
-    "create-repo": "node scripts/create-github-repo.js"
+    "update-prices": "node scripts/update-prices.js",
+    "sync": "node scripts/create-github-repo.js"
   },
   "keywords": [
     "opensea",
