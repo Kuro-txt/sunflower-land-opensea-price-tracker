@@ -1,20 +1,31 @@
 {
   "name": "sunflower-land-opensea-price-tracker",
   "version": "1.0.0",
-  "description": "Live web dashboard to fetch and track all items price from OpenSea for sunflower-land-collectibles",
-  "main": "server.js",
+  "description": "Live web dashboard and arbitrage scanner comparing Sunflower Land in-game marketplace prices against OpenSea floor listings.",
+  "homepage": "https://kuro-txt.github.io/sunflower-land-opensea-price-tracker/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kuro-txt/sunflower-land-opensea-price-tracker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Kuro-txt/sunflower-land-opensea-price-tracker/issues"
+  },
   "scripts": {
+    "start": "npx serve .",
     "update-prices": "node scripts/update-prices.js",
     "sync": "node scripts/create-github-repo.js"
   },
   "keywords": [
-    "opensea",
     "sunflower-land",
+    "opensea",
+    "sfl",
+    "polygon",
+    "erc-1155",
     "nft",
     "price-tracker",
-    "polygon"
+    "arbitrage"
   ],
-  "author": "",
+  "author": "Kuro-txt",
   "license": "MIT",
   "dependencies": {
     "cors": "^2.8.5",
