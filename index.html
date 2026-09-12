@@ -145,11 +145,12 @@
           <!-- Sort Dropdown -->
           <div class="relative">
             <select id="sortSelect" class="appearance-none bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 pr-8 text-xs font-medium text-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500/50 cursor-pointer">
+              <option value="diff_desc">📈 Price Diff: Highest (Net Game − OS)</option>
+              <option value="diff_asc">📉 Price Diff: Lowest (Net Game − OS)</option>
               <option value="price_asc">OpenSea: Low to High</option>
               <option value="price_desc">OpenSea: High to Low</option>
               <option value="ingame_asc">In-Game: Low to High (🌸 FLOWER)</option>
               <option value="ingame_desc">In-Game: High to Low (🌸 FLOWER)</option>
-              <option value="diff_desc">📈 Price Difference: Highest (Game − OS)</option>
               <option value="recently_listed">⚡ Recently Listed (OpenSea)</option>
               <option value="recently_sold">🔥 Recently Sold (OpenSea)</option>
               <option value="last_sale_desc">Last Sale: Highest</option>
@@ -176,6 +177,7 @@
       <div class="flex items-center gap-2 pt-2 border-t border-slate-800/60 text-xs overflow-x-auto no-scrollbar">
         <span class="text-slate-500 font-medium whitespace-nowrap mr-1">Filter:</span>
         <button data-filter="all" class="filter-pill active">All Items</button>
+        <button data-filter="diff" class="filter-pill">📊 Price Diff</button>
         <button data-filter="boost" class="filter-pill">⚡ With Boosts</button>
         <button data-filter="without-boost" class="filter-pill">Without Boost</button>
       </div>
