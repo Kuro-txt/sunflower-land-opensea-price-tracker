@@ -6,6 +6,8 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first');
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.argv[2];
 if (!GITHUB_TOKEN) {
