@@ -8,7 +8,7 @@ let currentSearch = '';
 let currentSort = 'price_asc';
 let currentView = 'grid';
 let isLoading = false;
-let flowerUsdcRate = 0.19501167;
+let flowerUsdcRate = 0.19009181;
 let customApiKey = localStorage.getItem('opensea_api_key') || 'add815580a904473ba7f162c0ccc4926';
 
 // Approx ETH price in USD for real-time reference
@@ -295,36 +295,31 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
   try {
     const timestamp = Date.now();
 
-    // 1. Concurrently fetch all 3 data feeds + live DEX rate
-    const [pricesRes, exchangeRes, inGameRes, dexRes] = await Promise.allSettled([
+    // 1. Concurrently fetch all 3 data feeds + live sfl.world exchange API
+    const [pricesRes, exchangeRes, inGameRes, directExchangeRes] = await Promise.allSettled([
       fetch(`./data/prices.json?v=${timestamp}`).then(r => r.ok ? r.json() : null),
       fetch(`./data/exchange.json?v=${timestamp}`).then(r => r.ok ? r.json() : null),
       fetch(`./data/ingame_nfts.json?v=${timestamp}`).then(r => r.ok ? r.json() : null),
-      fetch('https://api.dexscreener.com/latest/dex/tokens/0xD1f9c58e33933a993A3891F8acFe05a68E1afC05').then(r => r.ok ? r.json() : null).catch(() => null)
+      fetch('https://sfl.world/api/v1.1/exchange').then(r => r.ok ? r.json() : null).catch(() => null)
     ]);
 
     const pricesData = pricesRes.status === 'fulfilled' ? pricesRes.value : null;
     const exchangeData = exchangeRes.status === 'fulfilled' ? exchangeRes.value : null;
     const inGameData = inGameRes.status === 'fulfilled' ? inGameRes.value : null;
-    const dexData = dexRes.status === 'fulfilled' ? dexRes.value : null;
+    const directExchangeData = directExchangeRes.status === 'fulfilled' ? directExchangeRes.value : null;
 
-    // 2. Parse live Flower / SFL token exchange rate
+    // 2. Parse live Flower / SFL token exchange rate directly from sfl.world API
     let freshRate = null;
-    if (dexData?.pairs && dexData.pairs.length > 0) {
-      const bestPair = dexData.pairs.find(p => p.priceUsd && Number(p.priceUsd) > 0);
-      if (bestPair) {
-        freshRate = parseFloat(bestPair.priceUsd);
-      }
+    if (directExchangeData?.sfl?.usd && Number(directExchangeData.sfl.usd) > 0) {
+      freshRate = Number(directExchangeData.sfl.usd);
+    } else if (exchangeData?.sfl?.usd && Number(exchangeData.sfl.usd) > 0) {
+      freshRate = Number(exchangeData.sfl.usd);
+    } else if (exchangeData?.data?.sfl?.usd && Number(exchangeData.data.sfl.usd) > 0) {
+      freshRate = Number(exchangeData.data.sfl.usd);
+    } else if (pricesData?.flowerUsdcRate) {
+      freshRate = Number(pricesData.flowerUsdcRate);
     }
-    if (!freshRate && exchangeData) {
-      const sflRate = exchangeData.sfl?.usd || exchangeData.data?.sfl?.usd;
-      if (sflRate && Number(sflRate) > 0) {
-        freshRate = Number(sflRate);
-      }
-    }
-    if (!freshRate && pricesData?.flowerUsdcRate) {
-      freshRate = pricesData.flowerUsdcRate;
-    }
+
     if (freshRate && freshRate > 0) {
       flowerUsdcRate = freshRate;
       if (statFlowerRate) {
@@ -829,17 +824,19 @@ refreshBtn.addEventListener('click', () => {
 });
 
 // Reset filters
-resetFiltersBtn.addEventListener('click', () => {
-  searchInput.value = '';
-  currentSearch = '';
-  clearSearchBtn.classList.add('hidden');
-  document.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('active'));
-  document.querySelector('[data-filter="all"]').classList.add('active');
-  currentFilter = 'all';
-  currentSort = 'price_asc';
-  sortSelect.value = 'price_asc';
-  applyFiltersAndSort();
-});
+if (resetFiltersBtn) {
+  resetFiltersBtn.addEventListener('click', () => {
+    searchInput.value = '';
+    currentSearch = '';
+    clearSearchBtn.classList.add('hidden');
+    document.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('active'));
+    document.querySelector('[data-filter="all"]')?.classList.add('active');
+    currentFilter = 'all';
+    currentSort = 'price_asc';
+    sortSelect.value = 'price_asc';
+    applyFiltersAndSort();
+  });
+}
 
 // Settings Modal
 openSettingsBtn.addEventListener('click', () => {
