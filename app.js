@@ -632,21 +632,35 @@ function renderGridView() {
             <!-- In-Game Floor (FLOWER + USDC) with -10% calculation -->
             <div class="bg-slate-950/70 p-2.5 rounded-xl border ${hasInGame ? 'border-pink-500/30 bg-pink-950/10' : 'border-slate-800/60'} flex flex-col justify-between">
               <div>
-                <div class="flex items-center space-x-1 mb-1">
+                <div class="flex items-center space-x-1 mb-1.5">
                   <span class="text-[10px]">🌸</span>
                   <span class="text-[10px] ${hasInGame ? 'text-pink-300 font-semibold' : 'text-slate-400 font-semibold'} uppercase tracking-wider">In-Game</span>
                 </div>
-                <div class="text-xs font-black ${hasInGame ? 'text-pink-400' : 'text-slate-500'} tracking-tight flex items-baseline flex-wrap gap-1">
-                  <span>${inGamePriceDisplay} ${hasInGame ? `<span class="text-[9px] font-bold text-pink-300/80">SFL</span>` : ''}</span>
-                  ${hasInGame ? `<span class="text-[10px] font-medium text-slate-400 font-mono" title="Price minus 10% fee">(-10%: <strong class="text-pink-300">${formatFlowerPrice(item.inGameFloor * 0.9)}</strong>)</span>` : ''}
-                </div>
+                ${hasInGame ? `
+                  <div class="space-y-1.5">
+                    <!-- Standard Price & USDC below it -->
+                    <div>
+                      <div class="text-xs font-black text-pink-400 tracking-tight">
+                        ${inGamePriceDisplay} <span class="text-[9px] font-bold text-pink-300/80">SFL</span>
+                      </div>
+                      ${inGameUsdcDisplay ? `<div class="text-[10px] text-emerald-400 font-mono font-medium">${inGameUsdcDisplay}</div>` : ''}
+                    </div>
+
+                    <!-- -10% Price & USDC below it -->
+                    <div class="pt-1.5 border-t border-pink-500/20">
+                      <div class="text-xs font-bold text-pink-300 tracking-tight">
+                        <span class="text-[10px] text-slate-400 font-normal">-10%: </span>${formatFlowerPrice(item.inGameFloor * 0.9)} <span class="text-[9px] font-bold text-pink-300/80">SFL</span>
+                      </div>
+                      <div class="text-[10px] text-slate-400 font-mono">
+                        ${formatFlowerUsdc(item.inGameFloor * 0.9)}
+                      </div>
+                    </div>
+                  </div>
+                ` : `
+                  <div class="text-xs font-black text-slate-500 tracking-tight">Unlisted</div>
+                  <span class="text-[10px] text-slate-600 block mt-0.5">-</span>
+                `}
               </div>
-              ${inGameUsdcDisplay ? `
-                <div class="text-[10px] text-emerald-400 font-mono font-medium mt-0.5 leading-tight">
-                  <span>${inGameUsdcDisplay}</span>
-                  <span class="text-slate-500 block text-[9px]">(-10%: ${formatFlowerUsdc(item.inGameFloor * 0.9)})</span>
-                </div>
-              ` : '<span class="text-[10px] text-slate-600 block mt-0.5">-</span>'}
             </div>
           </div>
 
@@ -723,12 +737,31 @@ function renderTableView() {
         </td>
         <!-- In-Game Floor (FLOWER + USDC) with -10% calculation -->
         <td class="py-3 px-4 text-right">
-          <div>
-            <span class="font-extrabold ${hasInGame ? 'text-pink-400' : 'text-slate-500'}">${inGamePriceDisplay}</span>
-            ${hasInGame ? `<span class="text-[10px] text-pink-300/80 font-bold ml-0.5">SFL</span>` : ''}
-            ${hasInGame ? `<span class="text-[11px] text-slate-400 font-mono font-medium ml-1.5" title="In-game price minus 10% fee">(-10%: <strong class="text-pink-300">${formatFlowerPrice(item.inGameFloor * 0.9)} SFL</strong>)</span>` : ''}
-          </div>
-          ${inGameUsdcDisplay && hasInGame ? `<span class="text-[10px] text-emerald-400 font-mono block font-medium">${inGameUsdcDisplay} <span class="text-slate-500 font-normal">(-10%: ${formatFlowerUsdc(item.inGameFloor * 0.9)})</span></span>` : ''}
+          ${hasInGame ? `
+            <div class="inline-flex items-start justify-end space-x-3 text-right">
+              <div>
+                <div class="font-extrabold text-pink-400">
+                  ${inGamePriceDisplay} <span class="text-[10px] text-pink-300/80 font-bold ml-0.5">SFL</span>
+                </div>
+                <div class="text-[10px] text-emerald-400 font-mono font-medium">
+                  ${inGameUsdcDisplay}
+                </div>
+              </div>
+              <div class="pl-2.5 border-l border-slate-800/80 text-right">
+                <div class="font-bold text-pink-300 text-xs">
+                  <span class="text-[10px] text-slate-400 font-normal">-10%: </span>${formatFlowerPrice(item.inGameFloor * 0.9)} <span class="text-[9px] font-bold text-pink-300/80">SFL</span>
+                </div>
+                <div class="text-[10px] text-slate-400 font-mono">
+                  ${formatFlowerUsdc(item.inGameFloor * 0.9)}
+                </div>
+              </div>
+            </div>
+          ` : `
+            <div>
+              <span class="font-extrabold text-slate-500">Unlisted</span>
+              <span class="text-[10px] text-slate-600 block">-</span>
+            </div>
+          `}
         </td>
         <!-- Last Sold -->
         <td class="py-3 px-4 text-right">
