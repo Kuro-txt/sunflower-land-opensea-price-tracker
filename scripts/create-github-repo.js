@@ -23,24 +23,32 @@ const headers = {
   'User-Agent': 'SFL-OpenSea-Tracker-Publisher'
 };
 
-async function githubRequest(url, options = {}) {
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      ...headers,
-      ...(options.headers || {})
+async function githubRequest(url, options = {}, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(url, {
+        ...options,
+        headers: {
+          ...headers,
+          ...(options.headers || {})
+        }
+      });
+
+      const contentType = res.headers.get('content-type') || '';
+      const data = contentType.includes('application/json') ? await res.json() : await res.text();
+
+      if (!res.ok && res.status !== 404) {
+        const errMsg = typeof data === 'object' ? data.message || JSON.stringify(data) : data;
+        throw new Error(`GitHub API Error (${res.status}): ${errMsg}`);
+      }
+
+      return { status: res.status, data };
+    } catch (err) {
+      if (attempt === maxRetries) throw err;
+      console.log(`\n    ⚠️ Request attempt ${attempt} failed: ${err.message}. Retrying in 2s...`);
+      await new Promise(r => setTimeout(r, 2000));
     }
-  });
-
-  const contentType = res.headers.get('content-type') || '';
-  const data = contentType.includes('application/json') ? await res.json() : await res.text();
-
-  if (!res.ok && res.status !== 404) {
-    const errMsg = typeof data === 'object' ? data.message || JSON.stringify(data) : data;
-    throw new Error(`GitHub API Error (${res.status}): ${errMsg}`);
   }
-
-  return { status: res.status, data };
 }
 
 // Collect all project files to upload
@@ -52,8 +60,8 @@ function getProjectFiles(dir, baseDir = dir) {
     const fullPath = path.join(dir, item.name);
     const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
 
-    // Ignore node_modules, .git, etc.
-    if (item.name === 'node_modules' || item.name === '.git' || item.name.endsWith('.log') || item.name === '.env') {
+    // Ignore node_modules, .git, .github (needs workflow scope), etc.
+    if (item.name === 'node_modules' || item.name === '.git' || item.name === '.github' || item.name.endsWith('.log') || item.name === '.env') {
       continue;
     }
 
@@ -116,47 +124,51 @@ async function main() {
 
   // Upload each file via Contents API
   for (const file of files) {
-    process.stdout.write(`  Syncing ${file.path}... `);
-
-    // Compute Git SHA-1 for blob: sha1("blob " + size + "\0" + content)
-    const localSha = crypto.createHash('sha1')
-      .update(Buffer.concat([Buffer.from(`blob ${file.content.length}\0`), file.content]))
-      .digest('hex');
-
-    // Check if file already exists in repo to get its SHA
-    let existingSha;
     try {
-      const getFile = await githubRequest(`https://api.github.com/repos/${username}/${REPO_NAME}/contents/${file.path}`);
-      if (getFile.status === 200) {
-        existingSha = getFile.data.sha;
+      process.stdout.write(`  Syncing ${file.path}... `);
+
+      // Compute Git SHA-1 for blob: sha1("blob " + size + "\0" + content)
+      const localSha = crypto.createHash('sha1')
+        .update(Buffer.concat([Buffer.from(`blob ${file.content.length}\0`), file.content]))
+        .digest('hex');
+
+      // Check if file already exists in repo to get its SHA
+      let existingSha;
+      try {
+        const getFile = await githubRequest(`https://api.github.com/repos/${username}/${REPO_NAME}/contents/${file.path}`);
+        if (getFile.status === 200) {
+          existingSha = getFile.data.sha;
+        }
+      } catch {
+        // file does not exist yet
       }
-    } catch {
-      // file does not exist yet
-    }
 
-    if (existingSha && existingSha === localSha) {
-      console.log('✅ (Up to date)');
-      continue;
-    }
+      if (existingSha && existingSha === localSha) {
+        console.log('✅ (Up to date)');
+        continue;
+      }
 
-    const uploadBody = {
-      message: `Add/Update ${file.path}`,
-      content: file.content.toString('base64'),
-      branch: repo.default_branch || 'main'
-    };
-    if (existingSha) {
-      uploadBody.sha = existingSha;
-    }
+      const uploadBody = {
+        message: `Add/Update ${file.path}`,
+        content: file.content.toString('base64'),
+        branch: repo.default_branch || 'main'
+      };
+      if (existingSha) {
+        uploadBody.sha = existingSha;
+      }
 
-    const putRes = await githubRequest(`https://api.github.com/repos/${username}/${REPO_NAME}/contents/${file.path}`, {
-      method: 'PUT',
-      body: JSON.stringify(uploadBody)
-    });
+      const putRes = await githubRequest(`https://api.github.com/repos/${username}/${REPO_NAME}/contents/${file.path}`, {
+        method: 'PUT',
+        body: JSON.stringify(uploadBody)
+      });
 
-    if (putRes.status === 200 || putRes.status === 201) {
-      console.log('✅ Updated');
-    } else {
-      console.log(`⚠️ (Status ${putRes.status})`);
+      if (putRes.status === 200 || putRes.status === 201) {
+        console.log('✅ Updated');
+      } else {
+        console.log(`⚠️ (Status ${putRes.status})`);
+      }
+    } catch (fileErr) {
+      console.log(`❌ Error: ${fileErr.message}`);
     }
   }
 
