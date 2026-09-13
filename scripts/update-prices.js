@@ -110,26 +110,63 @@ async function fetchInGamePrices() {
   return inGameMap;
 }
 
+// Helper to fetch best floor with automatic rate-limit backoff
+async function fetchBestFloorWithRetry(id, maxRetries = 4) {
+  const url = `https://api.opensea.io/api/v2/listings/collection/${COLLECTION_SLUG}/nfts/${id}/best`;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          'x-api-key': OPENSEA_API_KEY,
+          'accept': 'application/json',
+          'user-agent': 'SunflowerLandPriceTracker/2.0'
+        }
+      });
+      if (res.status === 404) {
+        return { status: 404 };
+      }
+      if (res.status === 429) {
+        await sleep(1500 * attempt);
+        continue;
+      }
+      if (!res.ok) {
+        if (attempt === maxRetries) return null;
+        await sleep(1000);
+        continue;
+      }
+      return { status: 200, data: await res.json() };
+    } catch {
+      if (attempt === maxRetries) return null;
+      await sleep(1000);
+    }
+  }
+  return null;
+}
+
 // Verify exact OpenSea floor price for in-game traded items directly via /nfts/{id}/best
-async function verifyOpenSeaFloorsForInGameItems(inGameMap, listingsByToken) {
+async function verifyOpenSeaFloorsForInGameItems(inGameMap, listingsByToken, verifiedUnlistedIds) {
   console.log(`🔍 Verifying live OpenSea floors for ${inGameMap.size} in-game active items...`);
   const ids = Array.from(inGameMap.keys());
-  const batchSize = 8;
+  const batchSize = 4;
   let verifiedCount = 0;
 
   for (let i = 0; i < ids.length; i += batchSize) {
     const chunk = ids.slice(i, i + batchSize);
     await Promise.all(chunk.map(async (id) => {
       try {
-        const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/${COLLECTION_SLUG}/nfts/${id}/best`, {
-          headers: { 'x-api-key': OPENSEA_API_KEY, 'accept': 'application/json' }
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        const cur = data.price?.current?.currency || 'WETH';
-        const dec = data.price?.current?.decimals != null ? data.price.current.decimals : 18;
-        const totalVal = data.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
-        const offer = data.protocol_data?.parameters?.offer?.[0];
+        const res = await fetchBestFloorWithRetry(id);
+        if (!res) return;
+        if (res.status === 404) {
+          verifiedUnlistedIds.add(String(id));
+          verifiedUnlistedIds.add(Number(id));
+          return;
+        }
+
+        const data = res.data;
+        const cur = data?.price?.current?.currency || 'WETH';
+        const dec = data?.price?.current?.decimals != null ? data.price.current.decimals : 18;
+        const totalVal = data?.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
+        const offer = data?.protocol_data?.parameters?.offer?.[0];
         const startAmount = Number(offer?.startAmount || '1');
 
         let unitPrice = totalVal;
@@ -143,17 +180,19 @@ async function verifyOpenSeaFloorsForInGameItems(inGameMap, listingsByToken) {
         }
 
         if (unitPrice > 0) {
-          listingsByToken.set(id, [{
+          const entry = {
             unitPrice,
             currency: cur,
-            orderCreatedAt: data.order_created_at
-          }]);
+            orderCreatedAt: data?.order_created_at || 0
+          };
+          listingsByToken.set(String(id), [entry]);
+          listingsByToken.set(Number(id), [entry]);
           verifiedCount++;
         }
       } catch {}
     }));
     process.stdout.write(`  Verified ${Math.min(i + batchSize, ids.length)}/${ids.length} in-game items (${verifiedCount} listed on OS)\r`);
-    await sleep(100);
+    await sleep(200);
   }
   console.log(`\n✅ Verified ${verifiedCount} in-game items actively listed on OpenSea.`);
 }
@@ -318,9 +357,10 @@ async function main() {
   const flowerRate = await fetchExchangeRate();
   const inGameMap = await fetchInGamePrices();
   const listingsByToken = new Map();
+  const verifiedUnlistedIds = new Set();
 
   // 1. Verify exact live OpenSea floors for all active in-game traded items
-  await verifyOpenSeaFloorsForInGameItems(inGameMap, listingsByToken);
+  await verifyOpenSeaFloorsForInGameItems(inGameMap, listingsByToken, verifiedUnlistedIds);
 
   // 2. Fetch recent listing and sale events from OpenSea
   const [recentListings, recentSales] = await Promise.all([
@@ -353,7 +393,7 @@ async function main() {
     const existing = existingMap.get(idStr) || {};
     const officialName = (inGameInfo && inGameInfo.name) ? inGameInfo.name : (knownIds[numId] || existing.name || `Sunflower Land #${numId}`);
 
-    const tokenListings = listingsByToken.get(idStr) || [];
+    const tokenListings = listingsByToken.get(idStr) || listingsByToken.get(numId) || [];
     let isListed = tokenListings.length > 0;
     let rawPrice = 0;
     let floorPrice = 0;
@@ -373,19 +413,20 @@ async function main() {
     const lastListedTimestamp = rl ? rl.timestampMs : (existing.recentlyListed ? existing.lastListedTimestamp : 0);
     const lastListedPrice = rl ? rl.price : (existing.recentlyListed ? existing.lastListedPrice : 0);
 
-    // If item was unlisted in floor check but has an active recent listing event
-    if (!isListed && rl && rl.price > 0 && rl.price >= 0.00001 && (!isResourceToken(numId) || rl.price < 100)) {
-      isListed = true;
-      rawPrice = rl.price;
-      floorPrice = rl.price;
-      currency = rl.currency || 'WETH';
-    }
-
     const rs = recentSales.get(idStr) || (existing.recentlySold ? { timestampMs: existing.lastSaleTimestamp, price: existing.lastSalePrice, currency: existing.lastSaleCurrency } : null);
     const recentlySold = Boolean(rs);
     const lastSalePrice = rs ? rs.price : 0;
     const lastSaleCurrency = rs ? (rs.currency || 'WETH') : 'WETH';
     const lastSaleTimestamp = rs ? rs.timestampMs : 0;
+
+    // Check if recent listing was already sold or verified as unlisted
+    const isSoldOut = rs && rl && (rs.timestampMs >= rl.timestampMs);
+    if (!isListed && !verifiedUnlistedIds.has(idStr) && !verifiedUnlistedIds.has(numId) && !isSoldOut && rl && rl.price > 0 && rl.price >= 0.00001 && (!isResourceToken(numId) || rl.price < 100)) {
+      isListed = true;
+      rawPrice = rl.price;
+      floorPrice = rl.price;
+      currency = rl.currency || 'WETH';
+    }
 
     let inGameFloor = inGameInfo ? inGameInfo.floor : (existing.inGameFloor || null);
     if (inGameFloor) inGameFloor = Number(inGameFloor.toFixed(4));
