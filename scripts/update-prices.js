@@ -368,6 +368,48 @@ async function main() {
     fetchRecentSaleEvents()
   ]);
 
+  // 3. Immediately re-verify floor for all recently sold items so purchased items update their floor
+  console.log(`🔍 Verifying live OpenSea floors for ${recentSales.size} recently sold items...`);
+  const recentSaleIds = Array.from(recentSales.keys());
+  for (const soldId of recentSaleIds) {
+    try {
+      const res = await fetchBestFloorWithRetry(soldId);
+      if (res?.status === 404) {
+        verifiedUnlistedIds.add(String(soldId));
+        verifiedUnlistedIds.add(Number(soldId));
+        listingsByToken.delete(String(soldId));
+        listingsByToken.delete(Number(soldId));
+      } else if (res?.status === 200 && res.data) {
+        const data = res.data;
+        const cur = data?.price?.current?.currency || 'WETH';
+        const dec = data?.price?.current?.decimals != null ? data.price.current.decimals : 18;
+        const totalVal = data?.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
+        const offer = data?.protocol_data?.parameters?.offer?.[0];
+        const startAmount = Number(offer?.startAmount || '1');
+
+        let unitPrice = totalVal;
+        if (isResourceToken(soldId)) {
+          if (startAmount >= 1e18) {
+            unitPrice = totalVal / (startAmount / 1e18);
+          }
+        } else {
+          unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
+        }
+
+        if (unitPrice > 0 && unitPrice >= 0.00001) {
+          const entry = {
+            unitPrice,
+            currency: cur,
+            orderCreatedAt: data?.order_created_at || 0
+          };
+          listingsByToken.set(String(soldId), [entry]);
+          listingsByToken.set(Number(soldId), [entry]);
+        }
+      }
+    } catch {}
+    await sleep(200);
+  }
+
   // Load known official IDs
   const knownIdsPath = path.join(ROOT_DIR, 'scripts', 'known_ids.json');
   const knownIds = JSON.parse(fs.readFileSync(knownIdsPath, 'utf8'));
@@ -428,7 +470,7 @@ async function main() {
       currency = rl.currency || 'WETH';
     }
 
-    let inGameFloor = inGameInfo ? inGameInfo.floor : (existing.inGameFloor || null);
+    let inGameFloor = inGameInfo ? inGameInfo.floor : (inGameMap.size > 20 ? null : (existing.inGameFloor || null));
     if (inGameFloor) inGameFloor = Number(inGameFloor.toFixed(4));
     const inGameFloorUsdc = inGameFloor ? Number((inGameFloor * flowerRate).toFixed(4)) : null;
 
