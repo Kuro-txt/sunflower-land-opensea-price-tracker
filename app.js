@@ -241,7 +241,7 @@ async function refreshVisibleItemFloors(items, force = false) {
     if (force) return true;
     const cached = liveFloorCache.get(it.id);
     return !cached || (now - cached.timestamp > 15000); // 15 seconds TTL for rapid reactivity
-  }).slice(0, 24);
+  }).slice(0, 36);
 
   if (!toCheck.length) return;
   isFetchingLiveFloors = true;
@@ -254,12 +254,15 @@ async function refreshVisibleItemFloors(items, force = false) {
       const chunk = toCheck.slice(i, i + 4);
       await Promise.all(chunk.map(async (item) => {
         try {
-          const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/nfts/${item.id}/best`, {
+          const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/nfts/${item.id}/best?_t=${Date.now()}`, {
             headers,
+            cache: 'no-store',
             signal: AbortSignal.timeout(3500)
           });
           if (res.status === 404) {
             liveFloorCache.set(item.id, { price: 0, unlisted: true, timestamp: Date.now() });
+            item._liveVerified = true;
+            item._liveTimestamp = Date.now();
             if (!item.unlisted || item.rawPrice > 0) {
               item.unlisted = true;
               item.rawPrice = 0;
@@ -286,6 +289,8 @@ async function refreshVisibleItemFloors(items, force = false) {
 
           if (unitPrice > 0 && unitPrice >= 0.00001) {
             liveFloorCache.set(item.id, { price: unitPrice, currency: cur, timestamp: Date.now() });
+            item._liveVerified = true;
+            item._liveTimestamp = Date.now();
             if (Math.abs(item.rawPrice - unitPrice) > 0.0000001 || item.unlisted) {
               item.rawPrice = unitPrice;
               item.floorPrice = unitPrice;
@@ -327,12 +332,14 @@ async function fetchLiveOpenSeaUpdates() {
     };
 
     const [listingEventsRes, saleEventsRes] = await Promise.all([
-      fetch('https://api.opensea.io/api/v2/events/collection/sunflower-land-collectibles?event_type=listing&limit=50', {
+      fetch(`https://api.opensea.io/api/v2/events/collection/sunflower-land-collectibles?event_type=listing&limit=50&_t=${Date.now()}`, {
         headers,
+        cache: 'no-store',
         signal: AbortSignal.timeout(4500)
       }).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch('https://api.opensea.io/api/v2/events/collection/sunflower-land-collectibles?event_type=sale&limit=50', {
+      fetch(`https://api.opensea.io/api/v2/events/collection/sunflower-land-collectibles?event_type=sale&limit=50&_t=${Date.now()}`, {
         headers,
+        cache: 'no-store',
         signal: AbortSignal.timeout(4500)
       }).then(r => r.ok ? r.json() : null).catch(() => null)
     ]);
@@ -417,8 +424,9 @@ async function fetchLiveOpenSeaUpdates() {
         if (!target) return;
 
         try {
-          const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/nfts/${id}/best`, {
+          const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/nfts/${id}/best?_t=${Date.now()}`, {
             headers,
+            cache: 'no-store',
             signal: AbortSignal.timeout(3500)
           });
 
@@ -613,9 +621,35 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
       }
     }
 
-    // 4. Update Catalog with prices.json or memory fallback
+    // 4. Update Catalog with prices.json or memory fallback without clobbering live-verified prices
     if (pricesData && Array.isArray(pricesData.items) && pricesData.items.length > 0) {
-      allItems = pricesData.items;
+      if (!allItems.length) {
+        allItems = pricesData.items;
+      } else {
+        const liveMap = new Map();
+        allItems.forEach(i => {
+          if (i._liveVerified) liveMap.set(i.id, i);
+        });
+
+        allItems = pricesData.items.map(pItem => {
+          const live = liveMap.get(pItem.id);
+          if (live) {
+            return {
+              ...pItem,
+              rawPrice: live.rawPrice,
+              floorPrice: live.floorPrice,
+              currency: live.currency,
+              unlisted: live.unlisted,
+              recentlySold: live.recentlySold || pItem.recentlySold,
+              lastSalePrice: live.lastSalePrice || pItem.lastSalePrice,
+              lastSaleTimestamp: Math.max(live.lastSaleTimestamp || 0, pItem.lastSaleTimestamp || 0),
+              _liveVerified: true,
+              _liveTimestamp: live._liveTimestamp
+            };
+          }
+          return pItem;
+        });
+      }
     } else if (!allItems.length && window.INITIAL_COLLECTIBLES_DATA?.items) {
       allItems = window.INITIAL_COLLECTIBLES_DATA.items;
     }
@@ -1274,7 +1308,7 @@ if (refreshBtn) {
     await syncAllDataOnWebOpen(true);
     await checkPendingPurchases();
     if (filteredItems.length > 0) {
-      await refreshVisibleItemFloors(filteredItems.slice(0, 24), true);
+      await refreshVisibleItemFloors(filteredItems.slice(0, 36), true);
     }
     if (refreshIcon) refreshIcon.classList.remove('animate-spin-custom');
     if (syncStatusText) {
