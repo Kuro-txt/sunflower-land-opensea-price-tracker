@@ -385,8 +385,9 @@ async function fetchLiveOpenSeaUpdates() {
     ]);
 
     let updatedCount = 0;
+    const tokensToVerify = new Set();
 
-    // 1. Process recent live listings
+    // 1. Process recent live listings (metadata only, do NOT assume listing is active!)
     if (listingEventsRes?.asset_events) {
       for (const ev of listingEventsRes.asset_events) {
         const id = parseInt(ev.asset?.identifier, 10);
@@ -410,22 +411,12 @@ async function fetchLiveOpenSeaUpdates() {
             target.lastListedTimestamp = ts;
             target.lastListedPrice = unitPrice;
           }
-          // Update price if valid and not dust, but don't overwrite a recently /best-verified price
-          // (listing events are less current than a direct /best query)
-          const recentlyVerified = target._liveVerified && target._liveTimestamp && (Date.now() - target._liveTimestamp < 120000);
-          if (!recentlyVerified && unitPrice > 0 && unitPrice >= 0.00001 && (!isResourceToken(id) || unitPrice < 100)) {
-            target.unlisted = false;
-            target.rawPrice = unitPrice;
-            target.floorPrice = unitPrice;
-            target.currency = ev.payment?.symbol || 'WETH';
-            updatedCount++;
-          }
+          tokensToVerify.add(id);
         }
       }
     }
 
-    // 2. Process recent live sales
-    const soldTokenIds = new Set();
+    // 2. Process recent live sales (metadata only)
     if (saleEventsRes?.asset_events) {
       for (const ev of saleEventsRes.asset_events) {
         const id = parseInt(ev.asset?.identifier || ev.nft?.identifier, 10);
@@ -449,18 +440,16 @@ async function fetchLiveOpenSeaUpdates() {
             target.lastSaleTimestamp = ts;
             target.lastSalePrice = unitPrice;
             target.lastSaleCurrency = ev.payment?.symbol || 'WETH';
-            updatedCount++;
           }
-          soldTokenIds.add(id);
+          tokensToVerify.add(id);
         }
       }
     }
 
-    // 3. Immediately re-verify active floor for sold items!
-    // When an item is bought, its listing is gone. It either has a higher floor or is sold out (unlisted).
-    if (soldTokenIds.size > 0) {
-      const soldArray = Array.from(soldTokenIds).slice(0, 16);
-      await Promise.allSettled(soldArray.map(async (id) => {
+    // 3. Re-verify active floor for all tokens with recent listing or sale activity directly via /best
+    if (tokensToVerify.size > 0) {
+      const verifyArray = Array.from(tokensToVerify).slice(0, 24);
+      await Promise.allSettled(verifyArray.map(async (id) => {
         liveFloorCache.delete(id);
         const target = allItems.find(i => i.id === id);
         if (!target) return;
@@ -469,11 +458,11 @@ async function fetchLiveOpenSeaUpdates() {
           const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/nfts/${id}/best?_t=${Date.now()}`, {
             headers,
             cache: 'no-store',
-            signal: AbortSignal.timeout(3500)
+            signal: AbortSignal.timeout(5000)
           });
 
           if (res.status === 404) {
-            // Sold out on OpenSea! No listings remaining
+            // Unlisted / Sold out on OpenSea
             if (!target.unlisted || target.rawPrice > 0) {
               target.unlisted = true;
               target.rawPrice = 0;
@@ -484,35 +473,69 @@ async function fetchLiveOpenSeaUpdates() {
             return;
           }
 
-          if (res.ok) {
-            const data = await res.json();
-            const cur = data.price?.current?.currency || 'WETH';
-            const dec = data.price?.current?.decimals != null ? data.price.current.decimals : 18;
-            const totalVal = data.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
-            const offer = data.protocol_data?.parameters?.offer?.[0];
-            const startAmount = Number(offer?.startAmount || '1');
-
-            let unitPrice = totalVal;
-            if (isResourceToken(id)) {
-              if (startAmount < 1e18) return;
-              unitPrice = totalVal / (startAmount / 1e18);
-            } else {
-              unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
-            }
-
-            if (unitPrice > 0 && unitPrice >= 0.00001) {
-              if (Math.abs(target.rawPrice - unitPrice) > 0.0000001 || target.unlisted) {
-                target.rawPrice = unitPrice;
-                target.floorPrice = unitPrice;
-                target.currency = cur;
-                target.unlisted = false;
-                liveFloorCache.set(id, { price: unitPrice, currency: cur, timestamp: Date.now() });
+          if (!res.ok) {
+            const errText = await res.text().catch(() => '');
+            if (res.status === 400 && errText.includes('No listings found')) {
+              if (!target.unlisted || target.rawPrice > 0) {
+                target.unlisted = true;
+                target.rawPrice = 0;
+                target.floorPrice = 0;
+                liveFloorCache.set(id, { price: 0, unlisted: true, timestamp: Date.now() });
                 updatedCount++;
               }
             }
+            return;
+          }
+
+          const data = await res.json();
+          // Check if listing is active
+          if (data.status && data.status !== 'ACTIVE') {
+            if (!target.unlisted || target.rawPrice > 0) {
+              target.unlisted = true;
+              target.rawPrice = 0;
+              target.floorPrice = 0;
+              liveFloorCache.set(id, { price: 0, unlisted: true, timestamp: Date.now() });
+              updatedCount++;
+            }
+            return;
+          }
+
+          const cur = data.price?.current?.currency || 'WETH';
+          const dec = data.price?.current?.decimals != null ? data.price.current.decimals : 18;
+          const totalVal = data.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
+          const offer = data.protocol_data?.parameters?.offer?.[0];
+          const startAmount = Number(offer?.startAmount || '1');
+
+          let unitPrice = totalVal;
+          if (isResourceToken(id)) {
+            if (startAmount < 1e18) return;
+            unitPrice = totalVal / (startAmount / 1e18);
+          } else {
+            unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
+          }
+
+          if (unitPrice > 0 && unitPrice >= 0.00001) {
+            if (Math.abs(target.rawPrice - unitPrice) > 0.0000001 || target.unlisted) {
+              target.rawPrice = unitPrice;
+              target.floorPrice = unitPrice;
+              target.currency = cur;
+              target.unlisted = false;
+              target._liveVerified = true;
+              target._liveTimestamp = Date.now();
+              liveFloorCache.set(id, { price: unitPrice, currency: cur, timestamp: Date.now() });
+              updatedCount++;
+            }
+          } else {
+            if (!target.unlisted || target.rawPrice > 0) {
+              target.unlisted = true;
+              target.rawPrice = 0;
+              target.floorPrice = 0;
+              liveFloorCache.set(id, { price: 0, unlisted: true, timestamp: Date.now() });
+              updatedCount++;
+            }
           }
         } catch (e) {
-          console.warn(`Floor re-check after sale notice for #${id}:`, e.message);
+          console.warn(`Floor re-check notice for #${id}:`, e.message);
         }
       }));
     }
@@ -675,8 +698,8 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
 
         allItems = pricesData.items.map(pItem => {
           const live = liveMap.get(pItem.id);
-          // Only preserve live price if it was verified recently (within 2 minutes)
-          const liveStillFresh = live && live._liveTimestamp && (Date.now() - live._liveTimestamp < 120000);
+          // Only preserve live price if it was verified recently (within 2 minutes) AND this is not a force refresh
+          const liveStillFresh = !forceRefresh && live && live._liveTimestamp && (Date.now() - live._liveTimestamp < 120000);
           if (liveStillFresh) {
             return {
               ...pItem,
