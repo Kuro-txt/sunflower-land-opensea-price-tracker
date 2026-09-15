@@ -370,8 +370,10 @@ async function fetchLiveOpenSeaUpdates() {
             target.lastListedTimestamp = ts;
             target.lastListedPrice = unitPrice;
           }
-          // Update price if valid and not dust
-          if (unitPrice > 0 && unitPrice >= 0.00001 && (!isResourceToken(id) || unitPrice < 100)) {
+          // Update price if valid and not dust, but don't overwrite a recently /best-verified price
+          // (listing events are less current than a direct /best query)
+          const recentlyVerified = target._liveVerified && target._liveTimestamp && (Date.now() - target._liveTimestamp < 120000);
+          if (!recentlyVerified && unitPrice > 0 && unitPrice >= 0.00001 && (!isResourceToken(id) || unitPrice < 100)) {
             target.unlisted = false;
             target.rawPrice = unitPrice;
             target.floorPrice = unitPrice;
@@ -633,7 +635,9 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
 
         allItems = pricesData.items.map(pItem => {
           const live = liveMap.get(pItem.id);
-          if (live) {
+          // Only preserve live price if it was verified recently (within 2 minutes)
+          const liveStillFresh = live && live._liveTimestamp && (Date.now() - live._liveTimestamp < 120000);
+          if (liveStillFresh) {
             return {
               ...pItem,
               rawPrice: live.rawPrice,
@@ -1452,7 +1456,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     checkPendingPurchases();
     if (filteredItems.length > 0) {
-      refreshVisibleItemFloors(filteredItems.slice(0, 24));
+      refreshVisibleItemFloors(filteredItems.slice(0, 36), true);
     }
     fetchLiveOpenSeaUpdates();
   }
