@@ -368,19 +368,27 @@ async function main() {
     fetchRecentSaleEvents()
   ]);
 
-  // 3. Immediately re-verify floor for all recently sold items so purchased items update their floor
-  console.log(`🔍 Verifying live OpenSea floors for ${recentSales.size} recently sold items...`);
-  const recentSaleIds = Array.from(recentSales.keys());
-  for (const soldId of recentSaleIds) {
+  // 3. Immediately re-verify floor for all recently sold & recently listed items via /best
+  const activityIds = new Set([...Array.from(recentSales.keys()), ...Array.from(recentListings.keys())]);
+  console.log(`🔍 Verifying live OpenSea floors for ${activityIds.size} tokens with recent activity...`);
+  for (const actId of activityIds) {
     try {
-      const res = await fetchBestFloorWithRetry(soldId);
+      const res = await fetchBestFloorWithRetry(actId);
       if (res?.status === 404) {
-        verifiedUnlistedIds.add(String(soldId));
-        verifiedUnlistedIds.add(Number(soldId));
-        listingsByToken.delete(String(soldId));
-        listingsByToken.delete(Number(soldId));
+        verifiedUnlistedIds.add(String(actId));
+        verifiedUnlistedIds.add(Number(actId));
+        listingsByToken.delete(String(actId));
+        listingsByToken.delete(Number(actId));
       } else if (res?.status === 200 && res.data) {
         const data = res.data;
+        if (data?.status && data.status !== 'ACTIVE') {
+          verifiedUnlistedIds.add(String(actId));
+          verifiedUnlistedIds.add(Number(actId));
+          listingsByToken.delete(String(actId));
+          listingsByToken.delete(Number(actId));
+          continue;
+        }
+
         const cur = data?.price?.current?.currency || 'WETH';
         const dec = data?.price?.current?.decimals != null ? data.price.current.decimals : 18;
         const totalVal = data?.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
@@ -388,7 +396,7 @@ async function main() {
         const startAmount = Number(offer?.startAmount || '1');
 
         let unitPrice = totalVal;
-        if (isResourceToken(soldId)) {
+        if (isResourceToken(actId)) {
           if (startAmount >= 1e18) {
             unitPrice = totalVal / (startAmount / 1e18);
           }
@@ -402,12 +410,17 @@ async function main() {
             currency: cur,
             orderCreatedAt: data?.order_created_at || 0
           };
-          listingsByToken.set(String(soldId), [entry]);
-          listingsByToken.set(Number(soldId), [entry]);
+          listingsByToken.set(String(actId), [entry]);
+          listingsByToken.set(Number(actId), [entry]);
+        } else {
+          verifiedUnlistedIds.add(String(actId));
+          verifiedUnlistedIds.add(Number(actId));
+          listingsByToken.delete(String(actId));
+          listingsByToken.delete(Number(actId));
         }
       }
     } catch {}
-    await sleep(200);
+    await sleep(150);
   }
 
   // Load known official IDs
@@ -461,14 +474,6 @@ async function main() {
     const lastSaleCurrency = rs ? (rs.currency || 'WETH') : 'WETH';
     const lastSaleTimestamp = rs ? rs.timestampMs : 0;
 
-    // Check if recent listing was already sold or verified as unlisted
-    const isSoldOut = rs && rl && (rs.timestampMs >= rl.timestampMs);
-    if (!isListed && !verifiedUnlistedIds.has(idStr) && !verifiedUnlistedIds.has(numId) && !isSoldOut && rl && rl.price > 0 && rl.price >= 0.00001 && (!isResourceToken(numId) || rl.price < 100)) {
-      isListed = true;
-      rawPrice = rl.price;
-      floorPrice = rl.price;
-      currency = rl.currency || 'WETH';
-    }
 
     let inGameFloor = inGameInfo ? inGameInfo.floor : (inGameMap.size > 20 ? null : (existing.inGameFloor || null));
     if (inGameFloor) inGameFloor = Number(inGameFloor.toFixed(4));
