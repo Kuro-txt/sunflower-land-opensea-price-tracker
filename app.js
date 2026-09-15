@@ -232,7 +232,8 @@ const pendingPurchaseTokenIds = new Set();
  * Directly fetches official OpenSea /nfts/{id}/best endpoint in real time
  */
 async function refreshVisibleItemFloors(items, force = false) {
-  if (!items || !items.length || isFetchingLiveFloors) return;
+  if (!items || !items.length) return;
+  if (isFetchingLiveFloors && !force) return;
   const apiKey = customApiKey || localStorage.getItem('opensea_api_key') || 'add815580a904473ba7f162c0ccc4926';
   if (!apiKey) return;
 
@@ -241,7 +242,7 @@ async function refreshVisibleItemFloors(items, force = false) {
     if (force) return true;
     const cached = liveFloorCache.get(it.id);
     return !cached || (now - cached.timestamp > 15000); // 15 seconds TTL for rapid reactivity
-  }).slice(0, 36);
+  }).slice(0, 48);
 
   if (!toCheck.length) return;
   isFetchingLiveFloors = true;
@@ -257,7 +258,7 @@ async function refreshVisibleItemFloors(items, force = false) {
           const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/nfts/${item.id}/best?_t=${Date.now()}`, {
             headers,
             cache: 'no-store',
-            signal: AbortSignal.timeout(3500)
+            signal: AbortSignal.timeout(6000)
           });
           if (res.status === 404) {
             liveFloorCache.set(item.id, { price: 0, unlisted: true, timestamp: Date.now() });
@@ -271,8 +272,36 @@ async function refreshVisibleItemFloors(items, force = false) {
             }
             return;
           }
-          if (!res.ok) return;
+          if (!res.ok) {
+            const errText = await res.text().catch(() => '');
+            if (res.status === 400 && errText.includes('No listings found')) {
+              liveFloorCache.set(item.id, { price: 0, unlisted: true, timestamp: Date.now() });
+              item._liveVerified = true;
+              item._liveTimestamp = Date.now();
+              if (!item.unlisted || item.rawPrice > 0) {
+                item.unlisted = true;
+                item.rawPrice = 0;
+                item.floorPrice = 0;
+                hasChanges = true;
+              }
+            }
+            return;
+          }
           const data = await res.json();
+          // Check if listing is active
+          if (data.status && data.status !== 'ACTIVE') {
+            liveFloorCache.set(item.id, { price: 0, unlisted: true, timestamp: Date.now() });
+            item._liveVerified = true;
+            item._liveTimestamp = Date.now();
+            if (!item.unlisted || item.rawPrice > 0) {
+              item.unlisted = true;
+              item.rawPrice = 0;
+              item.floorPrice = 0;
+              hasChanges = true;
+            }
+            return;
+          }
+
           const cur = data.price?.current?.currency || 'WETH';
           const dec = data.price?.current?.decimals != null ? data.price.current.decimals : 18;
           const totalVal = data.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
@@ -296,6 +325,17 @@ async function refreshVisibleItemFloors(items, force = false) {
               item.floorPrice = unitPrice;
               item.currency = cur;
               item.unlisted = false;
+              hasChanges = true;
+            }
+          } else {
+            // No valid positive price found - mark unlisted
+            liveFloorCache.set(item.id, { price: 0, unlisted: true, timestamp: Date.now() });
+            item._liveVerified = true;
+            item._liveTimestamp = Date.now();
+            if (!item.unlisted || item.rawPrice > 0) {
+              item.unlisted = true;
+              item.rawPrice = 0;
+              item.floorPrice = 0;
               hasChanges = true;
             }
           }
@@ -883,7 +923,7 @@ function renderItems(checkLive = true) {
   }
 
   if (checkLive && filteredItems.length > 0) {
-    refreshVisibleItemFloors(filteredItems.slice(0, 16));
+    refreshVisibleItemFloors(filteredItems.slice(0, 36), filteredItems.length <= 10);
   }
 }
 
@@ -1309,10 +1349,11 @@ if (refreshBtn) {
     const syncStatusText = document.getElementById('syncStatusText');
     if (syncStatusText) syncStatusText.textContent = 'Refreshing live APIs & OpenSea...';
     liveFloorCache.clear();
+    isFetchingLiveFloors = false;
     await syncAllDataOnWebOpen(true);
     await checkPendingPurchases();
     if (filteredItems.length > 0) {
-      await refreshVisibleItemFloors(filteredItems.slice(0, 36), true);
+      await refreshVisibleItemFloors(filteredItems.slice(0, 48), true);
     }
     if (refreshIcon) refreshIcon.classList.remove('animate-spin-custom');
     if (syncStatusText) {
