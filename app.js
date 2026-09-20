@@ -449,33 +449,85 @@ async function fetchLiveOpenSeaUpdates() {
     // 3. Re-verify active floor for all tokens with recent listing or sale activity directly via /best
     if (tokensToVerify.size > 0) {
       const verifyArray = Array.from(tokensToVerify).slice(0, 24);
-      await Promise.allSettled(verifyArray.map(async (id) => {
-        liveFloorCache.delete(id);
-        const target = allItems.find(i => i.id === id);
-        if (!target) return;
+      for (let i = 0; i < verifyArray.length; i += 4) {
+        const chunk = verifyArray.slice(i, i + 4);
+        await Promise.allSettled(chunk.map(async (id) => {
+          liveFloorCache.delete(id);
+          const target = allItems.find(i => i.id === id);
+          if (!target) return;
 
-        try {
-          const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/nfts/${id}/best?_t=${Date.now()}`, {
-            headers,
-            cache: 'no-store',
-            signal: AbortSignal.timeout(5000)
-          });
+          try {
+            const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/nfts/${id}/best?_t=${Date.now()}`, {
+              headers,
+              cache: 'no-store',
+              signal: AbortSignal.timeout(6000)
+            });
 
-          if (res.status === 404) {
-            // Unlisted / Sold out on OpenSea
-            if (!target.unlisted || target.rawPrice > 0) {
-              target.unlisted = true;
-              target.rawPrice = 0;
-              target.floorPrice = 0;
-              liveFloorCache.set(id, { price: 0, unlisted: true, timestamp: Date.now() });
-              updatedCount++;
+            if (res.status === 404) {
+              // Unlisted / Sold out on OpenSea
+              if (!target.unlisted || target.rawPrice > 0) {
+                target.unlisted = true;
+                target.rawPrice = 0;
+                target.floorPrice = 0;
+                liveFloorCache.set(id, { price: 0, unlisted: true, timestamp: Date.now() });
+                updatedCount++;
+              }
+              return;
             }
-            return;
-          }
 
-          if (!res.ok) {
-            const errText = await res.text().catch(() => '');
-            if (res.status === 400 && errText.includes('No listings found')) {
+            if (!res.ok) {
+              const errText = await res.text().catch(() => '');
+              if (res.status === 400 && errText.includes('No listings found')) {
+                if (!target.unlisted || target.rawPrice > 0) {
+                  target.unlisted = true;
+                  target.rawPrice = 0;
+                  target.floorPrice = 0;
+                  liveFloorCache.set(id, { price: 0, unlisted: true, timestamp: Date.now() });
+                  updatedCount++;
+                }
+              }
+              return;
+            }
+
+            const data = await res.json();
+            // Check if listing is active
+            if (data.status && data.status !== 'ACTIVE') {
+              if (!target.unlisted || target.rawPrice > 0) {
+                target.unlisted = true;
+                target.rawPrice = 0;
+                target.floorPrice = 0;
+                liveFloorCache.set(id, { price: 0, unlisted: true, timestamp: Date.now() });
+                updatedCount++;
+              }
+              return;
+            }
+
+            const cur = data.price?.current?.currency || 'WETH';
+            const dec = data.price?.current?.decimals != null ? data.price.current.decimals : 18;
+            const totalVal = data.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
+            const offer = data.protocol_data?.parameters?.offer?.[0];
+            const startAmount = Number(offer?.startAmount || '1');
+
+            let unitPrice = totalVal;
+            if (isResourceToken(id)) {
+              if (startAmount < 1e18) return;
+              unitPrice = totalVal / (startAmount / 1e18);
+            } else {
+              unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
+            }
+
+            if (unitPrice > 0 && unitPrice >= 0.00001) {
+              if (Math.abs(target.rawPrice - unitPrice) > 0.0000001 || target.unlisted) {
+                target.rawPrice = unitPrice;
+                target.floorPrice = unitPrice;
+                target.currency = cur;
+                target.unlisted = false;
+                target._liveVerified = true;
+                target._liveTimestamp = Date.now();
+                liveFloorCache.set(id, { price: unitPrice, currency: cur, timestamp: Date.now() });
+                updatedCount++;
+              }
+            } else {
               if (!target.unlisted || target.rawPrice > 0) {
                 target.unlisted = true;
                 target.rawPrice = 0;
@@ -484,60 +536,11 @@ async function fetchLiveOpenSeaUpdates() {
                 updatedCount++;
               }
             }
-            return;
+          } catch (e) {
+            console.warn(`Floor re-check notice for #${id}:`, e.message);
           }
-
-          const data = await res.json();
-          // Check if listing is active
-          if (data.status && data.status !== 'ACTIVE') {
-            if (!target.unlisted || target.rawPrice > 0) {
-              target.unlisted = true;
-              target.rawPrice = 0;
-              target.floorPrice = 0;
-              liveFloorCache.set(id, { price: 0, unlisted: true, timestamp: Date.now() });
-              updatedCount++;
-            }
-            return;
-          }
-
-          const cur = data.price?.current?.currency || 'WETH';
-          const dec = data.price?.current?.decimals != null ? data.price.current.decimals : 18;
-          const totalVal = data.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
-          const offer = data.protocol_data?.parameters?.offer?.[0];
-          const startAmount = Number(offer?.startAmount || '1');
-
-          let unitPrice = totalVal;
-          if (isResourceToken(id)) {
-            if (startAmount < 1e18) return;
-            unitPrice = totalVal / (startAmount / 1e18);
-          } else {
-            unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
-          }
-
-          if (unitPrice > 0 && unitPrice >= 0.00001) {
-            if (Math.abs(target.rawPrice - unitPrice) > 0.0000001 || target.unlisted) {
-              target.rawPrice = unitPrice;
-              target.floorPrice = unitPrice;
-              target.currency = cur;
-              target.unlisted = false;
-              target._liveVerified = true;
-              target._liveTimestamp = Date.now();
-              liveFloorCache.set(id, { price: unitPrice, currency: cur, timestamp: Date.now() });
-              updatedCount++;
-            }
-          } else {
-            if (!target.unlisted || target.rawPrice > 0) {
-              target.unlisted = true;
-              target.rawPrice = 0;
-              target.floorPrice = 0;
-              liveFloorCache.set(id, { price: 0, unlisted: true, timestamp: Date.now() });
-              updatedCount++;
-            }
-          }
-        } catch (e) {
-          console.warn(`Floor re-check notice for #${id}:`, e.message);
-        }
-      }));
+        }));
+      }
     }
 
     if (updatedCount > 0) {
@@ -557,14 +560,12 @@ async function fetchLiveOpenSeaUpdates() {
 async function fetchLiveFlowerExchangeRate() {
   const targetUrl = 'https://sfl.world/api/v1.1/exchange';
   const urls = [
-    `https://cors-get-proxy.sirjosh.workers.dev/?url=${encodeURIComponent(targetUrl)}`,
-    targetUrl,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`
+    `https://cors-get-proxy.sirjosh.workers.dev/?url=${encodeURIComponent(targetUrl)}`
   ];
 
   for (const u of urls) {
     try {
-      const res = await fetch(u, { signal: AbortSignal.timeout(2500), cache: 'no-store' });
+      const res = await fetch(u, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
       if (res.ok) {
         const d = await res.json();
         if (d?.sfl?.usd && Number(d.sfl.usd) > 0) {
@@ -583,13 +584,12 @@ async function fetchLiveFlowerExchangeRate() {
 async function fetchLiveInGameMarketplace() {
   const targetUrl = 'https://sfl.world/api/v1/nfts';
   const urls = [
-    `https://cors-get-proxy.sirjosh.workers.dev/?url=${encodeURIComponent(targetUrl)}`,
-    targetUrl
+    `https://cors-get-proxy.sirjosh.workers.dev/?url=${encodeURIComponent(targetUrl)}`
   ];
 
   for (const u of urls) {
     try {
-      const res = await fetch(u, { signal: AbortSignal.timeout(3000), cache: 'no-store' });
+      const res = await fetch(u, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
       if (res.ok) {
         const d = await res.json();
         const list = d?.collectibles || d?.data || (Array.isArray(d) ? d : null);
@@ -648,28 +648,27 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
     }
 
     // 2. Parse live Flower / SFL token exchange rate directly from sfl.world API
-    let freshRate = null;
     if (directRateValue && Number(directRateValue) > 0) {
-      freshRate = Number(directRateValue);
-      console.log('🌸 Live SFL rate fetched fresh from sfl.world:', freshRate);
-    } else if (exchangeData?.sfl?.usd && Number(exchangeData.sfl.usd) > 0) {
-      freshRate = Number(exchangeData.sfl.usd);
-    } else if (exchangeData?.data?.sfl?.usd && Number(exchangeData.data.sfl.usd) > 0) {
-      freshRate = Number(exchangeData.data.sfl.usd);
-    } else if (pricesData?.flowerUsdcRate) {
-      freshRate = Number(pricesData.flowerUsdcRate);
+      flowerUsdcRate = Number(directRateValue);
+      console.log('🌸 Live SFL rate fetched fresh from sfl.world:', flowerUsdcRate);
+    } else if (!flowerUsdcRate || flowerUsdcRate <= 0) {
+      if (exchangeData?.sfl?.usd && Number(exchangeData.sfl.usd) > 0) {
+        flowerUsdcRate = Number(exchangeData.sfl.usd);
+      } else if (exchangeData?.data?.sfl?.usd && Number(exchangeData.data.sfl.usd) > 0) {
+        flowerUsdcRate = Number(exchangeData.data.sfl.usd);
+      } else if (pricesData?.flowerUsdcRate) {
+        flowerUsdcRate = Number(pricesData.flowerUsdcRate);
+      }
     }
 
-    if (freshRate && freshRate > 0) {
-      flowerUsdcRate = freshRate;
-      if (statFlowerRate) {
-        statFlowerRate.textContent = '$' + flowerUsdcRate.toFixed(4);
-      }
+    if (statFlowerRate && flowerUsdcRate > 0) {
+      statFlowerRate.textContent = '$' + flowerUsdcRate.toFixed(4);
     }
 
     // 3. Parse In-Game marketplace items (preferring real-time live feed if available)
     const inGameMap = new Map();
-    const rawList = (liveMarketList && liveMarketList.length > 0)
+    const isLiveInGame = Boolean(liveMarketList && liveMarketList.length > 0);
+    const rawList = isLiveInGame
       ? liveMarketList
       : (inGameData?.collectibles || inGameData?.data || (Array.isArray(inGameData) ? inGameData : []));
 
@@ -730,8 +729,13 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
       const inGameInfo = inGameMap.get(Number(item.id));
       if (inGameInfo) {
         if (inGameInfo.floor !== null) {
-          item.inGameFloor = inGameInfo.floor;
-          item.inGameFloorUsdc = Number((inGameInfo.floor * flowerUsdcRate).toFixed(4));
+          // If we got live marketplace data OR item has no floor yet, update it
+          if (isLiveInGame || item.inGameFloor == null) {
+            item.inGameFloor = inGameInfo.floor;
+          }
+          if (item.inGameFloor != null && flowerUsdcRate) {
+            item.inGameFloorUsdc = Number((item.inGameFloor * flowerUsdcRate).toFixed(4));
+          }
         }
         if (!item.boostText && inGameInfo.boostText) {
           item.boostText = inGameInfo.boostText;
@@ -745,7 +749,7 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
         }
       } else {
         // If live in-game marketplace data was retrieved and item is missing, it was purchased / unlisted in-game
-        if (inGameMap.size > 20) {
+        if (isLiveInGame && inGameMap.size > 20) {
           item.inGameFloor = null;
           item.inGameFloorUsdc = null;
         } else if (item.inGameFloor && flowerUsdcRate) {
