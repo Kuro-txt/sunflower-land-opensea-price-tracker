@@ -1306,29 +1306,158 @@ if (viewTableBtn) {
   });
 }
 
-// Refresh button (forces complete real-time sync across OpenSea + In-Game)
+// =========================================================================
+// Auto-Refresh & Limit Timer Management (Every 20 Seconds with Double-Refresh Prevention)
+// =========================================================================
+let isGlobalRefreshing = false;
+const AUTO_REFRESH_INTERVAL_SECONDS = 20; // Auto-refresh every 20s
+const BUTTON_LIMIT_COOLDOWN_SECONDS = 8; // Limit timer on button to prevent spamming
+let autoRefreshCountdown = AUTO_REFRESH_INTERVAL_SECONDS;
+let buttonCooldownCountdown = 0;
+let autoRefreshInterval = null;
+
+/**
+ * Update the Refresh button UI state and countdown timer
+ */
+function updateRefreshButtonUi() {
+  const refreshBtn = document.getElementById('refreshBtn');
+  const refreshIcon = document.getElementById('refreshIcon');
+  const refreshBtnLabel = document.getElementById('refreshBtnLabel') || refreshBtn?.querySelector('span');
+  const refreshTimerBadge = document.getElementById('refreshTimerBadge');
+
+  if (!refreshBtn) return;
+
+  if (isGlobalRefreshing) {
+    refreshBtn.disabled = true;
+    if (refreshIcon) refreshIcon.classList.add('animate-spin-custom');
+    if (refreshBtnLabel) refreshBtnLabel.textContent = 'Syncing';
+    if (refreshTimerBadge) refreshTimerBadge.textContent = '...';
+    return;
+  }
+
+  // Not currently refreshing
+  if (refreshIcon) refreshIcon.classList.remove('animate-spin-custom');
+
+  if (buttonCooldownCountdown > 0) {
+    // Under button limit cooldown (prevent double-clicks/spam)
+    refreshBtn.disabled = true;
+    if (refreshBtnLabel) refreshBtnLabel.textContent = 'Wait';
+    if (refreshTimerBadge) {
+      refreshTimerBadge.textContent = `${buttonCooldownCountdown}s`;
+      refreshTimerBadge.title = `Cooldown active (${buttonCooldownCountdown}s remaining)`;
+    }
+  } else {
+    // Idle & ready for manual click, showing countdown to next auto-refresh
+    refreshBtn.disabled = false;
+    if (refreshBtnLabel) refreshBtnLabel.textContent = 'Refresh';
+    if (refreshTimerBadge) {
+      refreshTimerBadge.textContent = `${autoRefreshCountdown}s`;
+      refreshTimerBadge.title = `Auto-refreshes in ${autoRefreshCountdown}s (Click to refresh now)`;
+    }
+  }
+}
+
+/**
+ * Perform a controlled, safe data refresh (Zero double-refresh concurrency)
+ */
+async function performControlledRefresh(source = 'auto') {
+  // STRICT MUTEX: If a refresh is already in progress, reject all concurrent triggers
+  if (isGlobalRefreshing) {
+    console.log(`[AutoRefresh] ⏳ Refresh already running (ignoring ${source} call)`);
+    return;
+  }
+
+  isGlobalRefreshing = true;
+  updateRefreshButtonUi();
+
+  const syncStatusText = document.getElementById('syncStatusText');
+  const syncDot = document.getElementById('syncDot');
+
+  if (syncStatusText) {
+    syncStatusText.textContent = source === 'manual' 
+      ? 'Refreshing feeds & live rates...' 
+      : 'Auto-refreshing feeds (20s)...';
+  }
+  if (syncDot) {
+    syncDot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse';
+  }
+
+  try {
+    if (source === 'manual' && filteredItems.length > 0) {
+      // Clear cache for top visible items on manual refresh
+      filteredItems.slice(0, 8).forEach(it => liveFloorCache.delete(it.id));
+    }
+
+    // 1. Fetch latest prices, in-game rates, and DEX exchange rates
+    await syncAllDataOnWebOpen(source === 'manual');
+
+    // 2. Re-verify any pending user purchases
+    await checkPendingPurchases();
+
+    // 3. Polite live verification for top visible items (via rate limiter)
+    if (filteredItems.length > 0 && !OpenSeaRateLimiter.isRateLimited()) {
+      await refreshVisibleItemFloors(filteredItems, 8, source === 'manual');
+    }
+
+    if (syncStatusText) {
+      syncStatusText.textContent = `Auto-Synced (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
+    }
+    if (syncDot) {
+      syncDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse';
+    }
+  } catch (err) {
+    console.warn(`[AutoRefresh] Refresh notice:`, err);
+  } finally {
+    isGlobalRefreshing = false;
+    updateRefreshButtonUi();
+  }
+}
+
+/**
+ * Main 1-second interval timer tick
+ * Handles both the 20s auto-refresh countdown and the button limit timer
+ */
+function initAutoRefreshAndTimer() {
+  if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+
+  autoRefreshCountdown = AUTO_REFRESH_INTERVAL_SECONDS;
+  buttonCooldownCountdown = 0;
+  updateRefreshButtonUi();
+
+  autoRefreshInterval = setInterval(() => {
+    // Decrement button limit cooldown
+    if (buttonCooldownCountdown > 0) {
+      buttonCooldownCountdown--;
+    }
+
+    // Decrement auto-refresh countdown
+    if (!isGlobalRefreshing) {
+      autoRefreshCountdown--;
+
+      if (autoRefreshCountdown <= 0) {
+        autoRefreshCountdown = AUTO_REFRESH_INTERVAL_SECONDS;
+        performControlledRefresh('auto');
+      }
+    }
+
+    updateRefreshButtonUi();
+  }, 1000);
+}
+
+// Refresh button with limit cooldown & double-refresh lock
 if (refreshBtn) {
   refreshBtn.addEventListener('click', async () => {
-    if (refreshIcon) refreshIcon.classList.add('animate-spin-custom');
-    const syncStatusText = document.getElementById('syncStatusText');
-    if (syncStatusText) syncStatusText.textContent = 'Refreshing feeds & live rates...';
-    try {
-      if (filteredItems.length > 0) {
-        filteredItems.slice(0, 8).forEach(it => liveFloorCache.delete(it.id));
-      }
-      await syncAllDataOnWebOpen(true);
-      await checkPendingPurchases();
-      if (filteredItems.length > 0) {
-        await refreshVisibleItemFloors(filteredItems, 8, true);
-      }
-      if (syncStatusText) {
-        syncStatusText.textContent = `⚡ Live Updated (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
-      }
-    } catch (err) {
-      console.warn('Manual refresh notice:', err);
-    } finally {
-      if (refreshIcon) refreshIcon.classList.remove('animate-spin-custom');
+    // Double refresh check: if cooling down or currently refreshing, reject click!
+    if (isGlobalRefreshing || buttonCooldownCountdown > 0) {
+      return;
     }
+
+    // Set button limit timer (8s cooldown)
+    buttonCooldownCountdown = BUTTON_LIMIT_COOLDOWN_SECONDS;
+    // Reset auto-refresh countdown so it doesn't trigger immediately after manual click
+    autoRefreshCountdown = AUTO_REFRESH_INTERVAL_SECONDS;
+
+    await performControlledRefresh('manual');
   });
 }
 
@@ -1525,9 +1654,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 2. Automatically sync all 3 feeds (prices.json, exchange.json, ingame_nfts.json) + live APIs on web open!
   syncAllDataOnWebOpen(true);
 
-  // 3. Keep syncing full feeds periodically in the background every 90 seconds
-  setInterval(() => {
-    syncAllDataOnWebOpen(false);
-  }, 90000);
+  // 3. Start auto-refresh every 20 seconds with button limit timer (double-refresh protected)
+  initAutoRefreshAndTimer();
 });
 
