@@ -222,334 +222,257 @@ function isResourceToken(id) {
 
 // In-memory cache for live verified floors to prevent redundant OpenSea queries
 const liveFloorCache = new Map();
-let isFetchingLiveFloors = false;
+let isBatchVerifying = false;
 
 // Track tokens user clicked to purchase on OpenSea for instant re-verification
 const pendingPurchaseTokenIds = new Set();
 
 /**
- * On-demand live floor verification for currently visible items
- * Directly fetches official OpenSea /nfts/{id}/best endpoint in real time
+ * Polite Rate Limiter & Circuit Breaker for OpenSea API v2 requests
+ * Guarantees minimum spacing between calls and stops all requests during 429 cooldown
  */
-async function refreshVisibleItemFloors(items, force = false) {
-  if (!items || !items.length) return;
-  if (isFetchingLiveFloors && !force) return;
+const OpenSeaRateLimiter = {
+  queue: [],
+  processing: false,
+  rateLimitUntil: 0,
+  minDelayMs: 280, // ~3.5 req/sec (safely below OpenSea standard threshold)
+  lastRequestTime: 0,
+
+  isRateLimited() {
+    return Date.now() < this.rateLimitUntil;
+  },
+
+  async schedule(fn, priority = false) {
+    if (this.isRateLimited()) {
+      return { rateLimited: true };
+    }
+    return new Promise((resolve, reject) => {
+      const task = { fn, resolve, reject };
+      if (priority) {
+        this.queue.unshift(task);
+      } else {
+        this.queue.push(task);
+      }
+      this.processQueue();
+    });
+  },
+
+  async processQueue() {
+    if (this.processing) return;
+    this.processing = true;
+
+    while (this.queue.length > 0) {
+      const now = Date.now();
+      if (now < this.rateLimitUntil) {
+        // Rate limit active: drop remaining tasks to avoid hammering OpenSea WAF
+        const remaining = this.queue.splice(0);
+        remaining.forEach(t => t.resolve({ rateLimited: true }));
+        break;
+      }
+
+      const elapsed = Date.now() - this.lastRequestTime;
+      if (elapsed < this.minDelayMs) {
+        await new Promise(r => setTimeout(r, this.minDelayMs - elapsed));
+      }
+
+      const task = this.queue.shift();
+      if (!task) break;
+
+      this.lastRequestTime = Date.now();
+      try {
+        const result = await task.fn();
+        task.resolve(result);
+      } catch (err) {
+        task.reject(err);
+      }
+    }
+
+    this.processing = false;
+  },
+
+  handleRateLimit() {
+    this.rateLimitUntil = Date.now() + 30000; // 30-second cooldown
+    console.warn('⚠️ OpenSea 429 Too Many Requests detected. Pausing client live checks for 30s.');
+    const syncStatusText = document.getElementById('syncStatusText');
+    if (syncStatusText) {
+      syncStatusText.textContent = '⚠️ OpenSea rate limit hit — cooling down (30s)';
+    }
+  }
+};
+
+/**
+ * Fetch authoritative best active listing for a single token directly from OpenSea
+ */
+async function fetchTokenBestListing(tokenId, priority = false) {
   const apiKey = customApiKey || localStorage.getItem('opensea_api_key') || 'add815580a904473ba7f162c0ccc4926';
-  if (!apiKey) return;
+  if (!apiKey) return null;
+
+  if (OpenSeaRateLimiter.isRateLimited()) {
+    return { rateLimited: true };
+  }
+
+  return OpenSeaRateLimiter.schedule(async () => {
+    try {
+      const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/nfts/${tokenId}/best`, {
+        headers: {
+          'x-api-key': apiKey,
+          'accept': 'application/json'
+        },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(6000)
+      });
+
+      if (res.status === 429) {
+        OpenSeaRateLimiter.handleRateLimit();
+        return { rateLimited: true };
+      }
+
+      if (res.status === 404) {
+        // Officially unlisted or sold out on OpenSea
+        return { unlisted: true, price: 0 };
+      }
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        if (res.status === 400 && errText.includes('No listings found')) {
+          return { unlisted: true, price: 0 };
+        }
+        return null;
+      }
+
+      const data = await res.json();
+      if (data.status && data.status !== 'ACTIVE') {
+        return { unlisted: true, price: 0 };
+      }
+
+      const cur = data.price?.current?.currency || 'WETH';
+      const dec = data.price?.current?.decimals != null ? data.price.current.decimals : 18;
+      const totalVal = data.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
+      const offer = data.protocol_data?.parameters?.offer?.[0];
+      const startAmount = Number(offer?.startAmount || '1');
+
+      let unitPrice = totalVal;
+      if (isResourceToken(tokenId)) {
+        if (startAmount < 1e18) return null; // ignore micro-dust
+        unitPrice = totalVal / (startAmount / 1e18);
+      } else {
+        unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
+      }
+
+      if (unitPrice > 0 && unitPrice >= 0.00001) {
+        return { unlisted: false, price: unitPrice, currency: cur };
+      } else {
+        return { unlisted: true, price: 0 };
+      }
+    } catch (err) {
+      return null;
+    }
+  }, priority);
+}
+
+/**
+ * Verify and update a single item floor in real time
+ */
+async function verifySingleItemFloor(tokenId, priority = true) {
+  const item = allItems.find(i => i.id === Number(tokenId));
+  if (!item) return false;
+
+  const result = await fetchTokenBestListing(tokenId, priority);
+  if (!result || result.rateLimited) return false;
+
+  let changed = false;
+  liveFloorCache.set(item.id, {
+    price: result.price || 0,
+    unlisted: !!result.unlisted,
+    currency: result.currency || 'WETH',
+    timestamp: Date.now()
+  });
+
+  item._liveVerified = true;
+  item._liveTimestamp = Date.now();
+
+  if (result.unlisted) {
+    if (!item.unlisted || item.rawPrice > 0) {
+      item.unlisted = true;
+      item.rawPrice = 0;
+      item.floorPrice = 0;
+      changed = true;
+    }
+  } else if (result.price > 0) {
+    if (Math.abs((item.rawPrice || 0) - result.price) > 0.0000001 || item.unlisted) {
+      item.rawPrice = result.price;
+      item.floorPrice = result.price;
+      item.currency = result.currency || 'WETH';
+      item.unlisted = false;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    computeClientStats(allItems, 'Live Verified (OpenSea)', new Date(), flowerUsdcRate);
+    applyFiltersAndSort(false);
+  }
+  return true;
+}
+
+/**
+ * Polite on-demand live floor verification for visible items
+ * Checks top items sequentially through the rate limiter without flooding OpenSea
+ */
+async function refreshVisibleItemFloors(items, maxCount = 8, force = false) {
+  if (!items || !items.length) return;
+  if (isBatchVerifying || OpenSeaRateLimiter.isRateLimited()) return;
 
   const now = Date.now();
   const toCheck = items.filter(it => {
     if (force) return true;
     const cached = liveFloorCache.get(it.id);
-    return !cached || (now - cached.timestamp > 15000); // 15 seconds TTL for rapid reactivity
-  }).slice(0, 48);
+    return !cached || (now - cached.timestamp > 60000); // 60s TTL
+  }).slice(0, maxCount);
 
   if (!toCheck.length) return;
-  isFetchingLiveFloors = true;
+  isBatchVerifying = true;
 
   try {
-    const headers = { 'x-api-key': apiKey, 'accept': 'application/json' };
     let hasChanges = false;
+    for (const item of toCheck) {
+      if (OpenSeaRateLimiter.isRateLimited()) break;
+      const res = await fetchTokenBestListing(item.id, false);
+      if (!res || res.rateLimited) continue;
 
-    for (let i = 0; i < toCheck.length; i += 4) {
-      const chunk = toCheck.slice(i, i + 4);
-      await Promise.all(chunk.map(async (item) => {
-        try {
-          const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/nfts/${item.id}/best?_t=${Date.now()}`, {
-            headers,
-            cache: 'no-store',
-            signal: AbortSignal.timeout(6000)
-          });
-          if (res.status === 404) {
-            liveFloorCache.set(item.id, { price: 0, unlisted: true, timestamp: Date.now() });
-            item._liveVerified = true;
-            item._liveTimestamp = Date.now();
-            if (!item.unlisted || item.rawPrice > 0) {
-              item.unlisted = true;
-              item.rawPrice = 0;
-              item.floorPrice = 0;
-              hasChanges = true;
-            }
-            return;
-          }
-          if (!res.ok) {
-            const errText = await res.text().catch(() => '');
-            if (res.status === 400 && errText.includes('No listings found')) {
-              liveFloorCache.set(item.id, { price: 0, unlisted: true, timestamp: Date.now() });
-              item._liveVerified = true;
-              item._liveTimestamp = Date.now();
-              if (!item.unlisted || item.rawPrice > 0) {
-                item.unlisted = true;
-                item.rawPrice = 0;
-                item.floorPrice = 0;
-                hasChanges = true;
-              }
-            }
-            return;
-          }
-          const data = await res.json();
-          // Check if listing is active
-          if (data.status && data.status !== 'ACTIVE') {
-            liveFloorCache.set(item.id, { price: 0, unlisted: true, timestamp: Date.now() });
-            item._liveVerified = true;
-            item._liveTimestamp = Date.now();
-            if (!item.unlisted || item.rawPrice > 0) {
-              item.unlisted = true;
-              item.rawPrice = 0;
-              item.floorPrice = 0;
-              hasChanges = true;
-            }
-            return;
-          }
+      liveFloorCache.set(item.id, {
+        price: res.price || 0,
+        unlisted: !!res.unlisted,
+        currency: res.currency || 'WETH',
+        timestamp: Date.now()
+      });
+      item._liveVerified = true;
+      item._liveTimestamp = Date.now();
 
-          const cur = data.price?.current?.currency || 'WETH';
-          const dec = data.price?.current?.decimals != null ? data.price.current.decimals : 18;
-          const totalVal = data.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
-          const offer = data.protocol_data?.parameters?.offer?.[0];
-          const startAmount = Number(offer?.startAmount || '1');
-
-          let unitPrice = totalVal;
-          if (isResourceToken(item.id)) {
-            if (startAmount < 1e18) return; // ignore micro-dust orders
-            unitPrice = totalVal / (startAmount / 1e18);
-          } else {
-            unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
-          }
-
-          if (unitPrice > 0 && unitPrice >= 0.00001) {
-            liveFloorCache.set(item.id, { price: unitPrice, currency: cur, timestamp: Date.now() });
-            item._liveVerified = true;
-            item._liveTimestamp = Date.now();
-            if (Math.abs(item.rawPrice - unitPrice) > 0.0000001 || item.unlisted) {
-              item.rawPrice = unitPrice;
-              item.floorPrice = unitPrice;
-              item.currency = cur;
-              item.unlisted = false;
-              hasChanges = true;
-            }
-          } else {
-            // No valid positive price found - mark unlisted
-            liveFloorCache.set(item.id, { price: 0, unlisted: true, timestamp: Date.now() });
-            item._liveVerified = true;
-            item._liveTimestamp = Date.now();
-            if (!item.unlisted || item.rawPrice > 0) {
-              item.unlisted = true;
-              item.rawPrice = 0;
-              item.floorPrice = 0;
-              hasChanges = true;
-            }
-          }
-        } catch {}
-      }));
+      if (res.unlisted) {
+        if (!item.unlisted || item.rawPrice > 0) {
+          item.unlisted = true;
+          item.rawPrice = 0;
+          item.floorPrice = 0;
+          hasChanges = true;
+        }
+      } else if (res.price > 0) {
+        if (Math.abs((item.rawPrice || 0) - res.price) > 0.0000001 || item.unlisted) {
+          item.rawPrice = res.price;
+          item.floorPrice = res.price;
+          item.currency = res.currency || 'WETH';
+          item.unlisted = false;
+          hasChanges = true;
+        }
+      }
     }
 
     if (hasChanges) {
-      computeClientStats(allItems, 'OpenSea Live Verified (Real-Time)', new Date(), flowerUsdcRate);
+      computeClientStats(allItems, 'OpenSea Live Verified', new Date(), flowerUsdcRate);
       applyFiltersAndSort(false);
-      const syncStatusText = document.getElementById('syncStatusText');
-      if (syncStatusText) {
-        syncStatusText.textContent = `⚡ Live OpenSea Verified (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
-      }
     }
-  } catch (err) {
-    console.warn('Live floor check notice:', err);
   } finally {
-    isFetchingLiveFloors = false;
-  }
-}
-
-/**
- * Fetch live fresh listings & events directly from OpenSea API v2 in real-time
- */
-async function fetchLiveOpenSeaUpdates() {
-  const apiKey = customApiKey || localStorage.getItem('opensea_api_key') || 'add815580a904473ba7f162c0ccc4926';
-  if (!apiKey || !allItems.length) return;
-
-  try {
-    const headers = {
-      'x-api-key': apiKey,
-      'accept': 'application/json'
-    };
-
-    const [listingEventsRes, saleEventsRes] = await Promise.all([
-      fetch(`https://api.opensea.io/api/v2/events/collection/sunflower-land-collectibles?event_type=listing&limit=50&_t=${Date.now()}`, {
-        headers,
-        cache: 'no-store',
-        signal: AbortSignal.timeout(4500)
-      }).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(`https://api.opensea.io/api/v2/events/collection/sunflower-land-collectibles?event_type=sale&limit=50&_t=${Date.now()}`, {
-        headers,
-        cache: 'no-store',
-        signal: AbortSignal.timeout(4500)
-      }).then(r => r.ok ? r.json() : null).catch(() => null)
-    ]);
-
-    let updatedCount = 0;
-    const tokensToVerify = new Set();
-
-    // 1. Process recent live listings (metadata only, do NOT assume listing is active!)
-    if (listingEventsRes?.asset_events) {
-      for (const ev of listingEventsRes.asset_events) {
-        const id = parseInt(ev.asset?.identifier, 10);
-        if (!id) continue;
-        const target = allItems.find(i => i.id === id);
-        if (target) {
-          const dec = ev.payment?.decimals || 18;
-          const totalVal = ev.payment?.quantity ? (Number(ev.payment.quantity) / Math.pow(10, dec)) : 0;
-          let unitPrice = totalVal;
-          if (isResourceToken(id)) {
-            const rawQty = Number(ev.quantity || 1);
-            const tokenUnits = rawQty >= 1e18 ? (rawQty / 1e18) : (rawQty > 0 ? (rawQty / 1e18) : 1);
-            if (tokenUnits > 0) unitPrice = totalVal / tokenUnits;
-          } else if (ev.quantity && Number(ev.quantity) > 1) {
-            unitPrice = totalVal / Number(ev.quantity);
-          }
-
-          const ts = (ev.event_timestamp || 0) * 1000;
-          target.recentlyListed = true;
-          if (!target.lastListedTimestamp || ts > target.lastListedTimestamp) {
-            target.lastListedTimestamp = ts;
-            target.lastListedPrice = unitPrice;
-          }
-          tokensToVerify.add(id);
-        }
-      }
-    }
-
-    // 2. Process recent live sales (metadata only)
-    if (saleEventsRes?.asset_events) {
-      for (const ev of saleEventsRes.asset_events) {
-        const id = parseInt(ev.asset?.identifier || ev.nft?.identifier, 10);
-        if (!id) continue;
-        const target = allItems.find(i => i.id === id);
-        if (target) {
-          const dec = ev.payment?.decimals || 18;
-          const totalVal = ev.payment?.quantity ? (Number(ev.payment.quantity) / Math.pow(10, dec)) : 0;
-          let unitPrice = totalVal;
-          if (isResourceToken(id)) {
-            const rawQty = Number(ev.quantity || 1);
-            const tokenUnits = rawQty >= 1e18 ? (rawQty / 1e18) : (rawQty > 0 ? (rawQty / 1e18) : 1);
-            if (tokenUnits > 0) unitPrice = totalVal / tokenUnits;
-          } else if (ev.quantity && Number(ev.quantity) > 1) {
-            unitPrice = totalVal / Number(ev.quantity);
-          }
-
-          const ts = (ev.event_timestamp || 0) * 1000;
-          target.recentlySold = true;
-          if (!target.lastSaleTimestamp || ts > target.lastSaleTimestamp) {
-            target.lastSaleTimestamp = ts;
-            target.lastSalePrice = unitPrice;
-            target.lastSaleCurrency = ev.payment?.symbol || 'WETH';
-          }
-          tokensToVerify.add(id);
-        }
-      }
-    }
-
-    // 3. Re-verify active floor for all tokens with recent listing or sale activity directly via /best
-    if (tokensToVerify.size > 0) {
-      const verifyArray = Array.from(tokensToVerify).slice(0, 24);
-      for (let i = 0; i < verifyArray.length; i += 4) {
-        const chunk = verifyArray.slice(i, i + 4);
-        await Promise.allSettled(chunk.map(async (id) => {
-          liveFloorCache.delete(id);
-          const target = allItems.find(i => i.id === id);
-          if (!target) return;
-
-          try {
-            const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/nfts/${id}/best?_t=${Date.now()}`, {
-              headers,
-              cache: 'no-store',
-              signal: AbortSignal.timeout(6000)
-            });
-
-            if (res.status === 404) {
-              // Unlisted / Sold out on OpenSea
-              if (!target.unlisted || target.rawPrice > 0) {
-                target.unlisted = true;
-                target.rawPrice = 0;
-                target.floorPrice = 0;
-                liveFloorCache.set(id, { price: 0, unlisted: true, timestamp: Date.now() });
-                updatedCount++;
-              }
-              return;
-            }
-
-            if (!res.ok) {
-              const errText = await res.text().catch(() => '');
-              if (res.status === 400 && errText.includes('No listings found')) {
-                if (!target.unlisted || target.rawPrice > 0) {
-                  target.unlisted = true;
-                  target.rawPrice = 0;
-                  target.floorPrice = 0;
-                  liveFloorCache.set(id, { price: 0, unlisted: true, timestamp: Date.now() });
-                  updatedCount++;
-                }
-              }
-              return;
-            }
-
-            const data = await res.json();
-            // Check if listing is active
-            if (data.status && data.status !== 'ACTIVE') {
-              if (!target.unlisted || target.rawPrice > 0) {
-                target.unlisted = true;
-                target.rawPrice = 0;
-                target.floorPrice = 0;
-                liveFloorCache.set(id, { price: 0, unlisted: true, timestamp: Date.now() });
-                updatedCount++;
-              }
-              return;
-            }
-
-            const cur = data.price?.current?.currency || 'WETH';
-            const dec = data.price?.current?.decimals != null ? data.price.current.decimals : 18;
-            const totalVal = data.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
-            const offer = data.protocol_data?.parameters?.offer?.[0];
-            const startAmount = Number(offer?.startAmount || '1');
-
-            let unitPrice = totalVal;
-            if (isResourceToken(id)) {
-              if (startAmount < 1e18) return;
-              unitPrice = totalVal / (startAmount / 1e18);
-            } else {
-              unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
-            }
-
-            if (unitPrice > 0 && unitPrice >= 0.00001) {
-              if (Math.abs(target.rawPrice - unitPrice) > 0.0000001 || target.unlisted) {
-                target.rawPrice = unitPrice;
-                target.floorPrice = unitPrice;
-                target.currency = cur;
-                target.unlisted = false;
-                target._liveVerified = true;
-                target._liveTimestamp = Date.now();
-                liveFloorCache.set(id, { price: unitPrice, currency: cur, timestamp: Date.now() });
-                updatedCount++;
-              }
-            } else {
-              if (!target.unlisted || target.rawPrice > 0) {
-                target.unlisted = true;
-                target.rawPrice = 0;
-                target.floorPrice = 0;
-                liveFloorCache.set(id, { price: 0, unlisted: true, timestamp: Date.now() });
-                updatedCount++;
-              }
-            }
-          } catch (e) {
-            console.warn(`Floor re-check notice for #${id}:`, e.message);
-          }
-        }));
-      }
-    }
-
-    if (updatedCount > 0) {
-      computeClientStats(allItems, 'OpenSea Live API v2 (Real-Time)', new Date(), flowerUsdcRate);
-      applyFiltersAndSort(false);
-      console.log(`⚡ Live OpenSea API updated ${updatedCount} items in real-time!`);
-    }
-  } catch (err) {
-    console.warn('Live OpenSea API fetch notice:', err.message);
+    isBatchVerifying = false;
   }
 }
 
@@ -761,10 +684,14 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
     totalCountEl.textContent = allItems.length;
     // Always use current live timestamp for accurate user visibility
     computeClientStats(allItems, 'Live Synced (OpenSea & In-Game)', new Date(), flowerUsdcRate);
-    applyFiltersAndSort();
+    applyFiltersAndSort(false);
 
-    // 6. Concurrently trigger live OpenSea API updates (real-time events & best listings)
-    fetchLiveOpenSeaUpdates().catch(err => console.warn('OpenSea live update notice:', err));
+    // 6. Polite background verification for top visible items (staggered & rate-limited)
+    if (filteredItems.length > 0) {
+      setTimeout(() => {
+        refreshVisibleItemFloors(filteredItems, 8);
+      }, 500);
+    }
 
     // 7. Update UI sync status
     if (syncStatusText) {
@@ -950,7 +877,7 @@ function renderItems(checkLive = true) {
   }
 
   if (checkLive && filteredItems.length > 0) {
-    refreshVisibleItemFloors(filteredItems.slice(0, 36), filteredItems.length <= 10);
+    refreshVisibleItemFloors(filteredItems, filteredItems.length <= 8 ? filteredItems.length : 8);
   }
 }
 
@@ -1079,7 +1006,12 @@ function renderGridView() {
                     <span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
                     <span class="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">OpenSea</span>
                   </div>
-                  <span class="text-[9px] font-medium px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">WETH</span>
+                  <div class="flex items-center space-x-1">
+                    <button class="verify-token-btn text-slate-500 hover:text-amber-400 transition p-0.5 rounded cursor-pointer" data-token-id="${item.id}" title="Check live OpenSea floor">
+                      <i data-lucide="refresh-cw" class="w-2.5 h-2.5"></i>
+                    </button>
+                    <span class="text-[9px] font-medium px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">WETH</span>
+                  </div>
                 </div>
                 ${isListed ? `
                   <div class="space-y-1.5">
@@ -1223,9 +1155,14 @@ function renderTableView() {
         </td>
         <!-- OpenSea Floor -->
         <td class="py-3 px-4 text-right">
-          <div>
-            <span class="font-extrabold ${isListed ? 'text-amber-400' : 'text-slate-500'}">${priceDisplay}</span>
-            ${isListed ? `<span class="text-[10px] text-blue-400 font-bold ml-0.5">${currency}</span>` : ''}
+          <div class="inline-flex items-center justify-end space-x-1.5">
+            <button class="verify-token-btn text-slate-500 hover:text-amber-400 transition p-0.5 rounded cursor-pointer" data-token-id="${item.id}" title="Check live OpenSea floor">
+              <i data-lucide="refresh-cw" class="w-3 h-3"></i>
+            </button>
+            <div>
+              <span class="font-extrabold ${isListed ? 'text-amber-400' : 'text-slate-500'}">${priceDisplay}</span>
+              ${isListed ? `<span class="text-[10px] text-blue-400 font-bold ml-0.5">${currency}</span>` : ''}
+            </div>
           </div>
           ${isListed ? `
             <div class="text-[10px] text-slate-400 font-mono">
@@ -1374,17 +1311,23 @@ if (refreshBtn) {
   refreshBtn.addEventListener('click', async () => {
     if (refreshIcon) refreshIcon.classList.add('animate-spin-custom');
     const syncStatusText = document.getElementById('syncStatusText');
-    if (syncStatusText) syncStatusText.textContent = 'Refreshing live APIs & OpenSea...';
-    liveFloorCache.clear();
-    isFetchingLiveFloors = false;
-    await syncAllDataOnWebOpen(true);
-    await checkPendingPurchases();
-    if (filteredItems.length > 0) {
-      await refreshVisibleItemFloors(filteredItems.slice(0, 48), true);
-    }
-    if (refreshIcon) refreshIcon.classList.remove('animate-spin-custom');
-    if (syncStatusText) {
-      syncStatusText.textContent = `⚡ Live Updated (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
+    if (syncStatusText) syncStatusText.textContent = 'Refreshing feeds & live rates...';
+    try {
+      if (filteredItems.length > 0) {
+        filteredItems.slice(0, 8).forEach(it => liveFloorCache.delete(it.id));
+      }
+      await syncAllDataOnWebOpen(true);
+      await checkPendingPurchases();
+      if (filteredItems.length > 0) {
+        await refreshVisibleItemFloors(filteredItems, 8, true);
+      }
+      if (syncStatusText) {
+        syncStatusText.textContent = `⚡ Live Updated (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
+      }
+    } catch (err) {
+      console.warn('Manual refresh notice:', err);
+    } finally {
+      if (refreshIcon) refreshIcon.classList.remove('animate-spin-custom');
     }
   });
 }
@@ -1513,24 +1456,49 @@ document.addEventListener('click', (e) => {
 async function checkPendingPurchases() {
   if (!pendingPurchaseTokenIds.size) return;
   const ids = Array.from(pendingPurchaseTokenIds);
-  const items = allItems.filter(i => ids.includes(i.id));
-  if (items.length) {
-    await refreshVisibleItemFloors(items, true);
+  pendingPurchaseTokenIds.clear();
+  for (const id of ids) {
+    await verifySingleItemFloor(id, true);
   }
 }
+
+// Click handler for per-item live OpenSea floor verification
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.verify-token-btn');
+  if (btn && btn.dataset.tokenId) {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = Number(btn.dataset.tokenId);
+    const icon = btn.querySelector('[data-lucide="refresh-cw"], svg');
+    if (icon) icon.classList.add('animate-spin-custom');
+    try {
+      const ok = await verifySingleItemFloor(id, true);
+      if (ok) {
+        btn.classList.add('text-emerald-400');
+        setTimeout(() => btn.classList.remove('text-emerald-400'), 1500);
+      }
+    } finally {
+      if (icon) icon.classList.remove('animate-spin-custom');
+    }
+  }
+});
+
+let lastVisibilityCheckTime = 0;
 
 // When tab becomes active or focused (e.g. user just completed purchase on OpenSea)
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
+    const now = Date.now();
+    if (now - lastVisibilityCheckTime < 10000) return;
+    lastVisibilityCheckTime = now;
     checkPendingPurchases();
-    if (filteredItems.length > 0) {
-      refreshVisibleItemFloors(filteredItems.slice(0, 36), true);
-    }
-    fetchLiveOpenSeaUpdates();
   }
 });
 
 window.addEventListener('focus', () => {
+  const now = Date.now();
+  if (now - lastVisibilityCheckTime < 10000) return;
+  lastVisibilityCheckTime = now;
   checkPendingPurchases();
 });
 
@@ -1549,7 +1517,7 @@ document.addEventListener('DOMContentLoaded', () => {
     flowerUsdcRate = window.INITIAL_COLLECTIBLES_DATA.flowerUsdcRate || flowerUsdcRate;
     totalCountEl.textContent = allItems.length;
     computeClientStats(allItems, 'OpenSea + In-Game (Initial)', window.INITIAL_COLLECTIBLES_DATA.lastUpdated, flowerUsdcRate);
-    applyFiltersAndSort();
+    applyFiltersAndSort(false);
   } else {
     showLoading(true);
   }
@@ -1557,14 +1525,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // 2. Automatically sync all 3 feeds (prices.json, exchange.json, ingame_nfts.json) + live APIs on web open!
   syncAllDataOnWebOpen(true);
 
-  // 3. Keep syncing full feeds periodically in the background every 60 seconds
+  // 3. Keep syncing full feeds periodically in the background every 90 seconds
   setInterval(() => {
     syncAllDataOnWebOpen(false);
-  }, 60000);
-
-  // 4. Poll live OpenSea events & sales every 20 seconds for real-time reactivity
-  setInterval(() => {
-    fetchLiveOpenSeaUpdates();
-  }, 20000);
+  }, 90000);
 });
 
