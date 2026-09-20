@@ -57,10 +57,11 @@
           <span>OpenSea Collection</span>
         </a>
 
-        <!-- Refresh Button -->
-        <button id="refreshBtn" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md shadow-amber-500/20 transition active:scale-95">
+        <!-- Refresh Button with Limit Timer & Auto-Refresh Countdown -->
+        <button id="refreshBtn" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md shadow-amber-500/20 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none">
           <i data-lucide="refresh-cw" id="refreshIcon" class="w-3.5 h-3.5"></i>
-          <span>Refresh</span>
+          <span id="refreshBtnLabel">Refresh</span>
+          <span id="refreshTimerBadge" class="text-[10px] font-mono font-bold bg-black/15 text-slate-950 px-1.5 py-0.5 rounded-md" title="Auto-refreshes every 20s">20s</span>
         </button>
       </div>
     </div>
@@ -260,7 +261,7 @@
     </div>
   </footer>
 
-  <script src="data.js?v=20260920_1820"></script>
-  <script src="app.js?v=20260920_1820"></script>
+  <script src="data.js?v=20260920_1830"></script>
+  <script src="app.js?v=20260920_1830"></script>
 </body>
 </html>
