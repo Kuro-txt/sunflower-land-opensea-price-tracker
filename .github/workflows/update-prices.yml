@@ -1,0 +1,38 @@
+name: Update Collectibles Prices
+
+on:
+  schedule:
+    - cron: '0 * * * *' # Run hourly
+  workflow_dispatch: # Allows manual one-click trigger from GitHub Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  update-prices:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install --production
+
+      - name: Fetch Fresh Prices (OpenSea & In-Game)
+        env:
+          OPENSEA_API_KEY: ${{ secrets.OPENSEA_API_KEY || 'add815580a904473ba7f162c0ccc4926' }}
+        run: node scripts/update-prices.js
+
+      - name: Commit and push if updated
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/ data.js
+          git diff --quiet && git diff --staged --quiet || (git commit -m "chore(data): auto-update fresh OpenSea & in-game prices [skip ci]" && git push)
+
