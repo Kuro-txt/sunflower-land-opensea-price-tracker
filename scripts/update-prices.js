@@ -72,7 +72,14 @@ async function fetchInGamePrices() {
   const inGameMap = new Map();
   try {
     const data = await fetchWithRetry('https://sfl.world/api/v1/nfts');
-    const list = data?.collectibles || data?.data || (Array.isArray(data) ? data : []);
+    const list = [];
+    if (Array.isArray(data)) {
+      list.push(...data);
+    } else if (data) {
+      if (Array.isArray(data.collectibles)) list.push(...data.collectibles);
+      if (Array.isArray(data.wearables)) list.push(...data.wearables);
+      if (Array.isArray(data.data)) list.push(...data.data);
+    }
     for (const item of list) {
       if (item.id && item.floor) {
         inGameMap.set(String(item.id), {
@@ -85,14 +92,21 @@ async function fetchInGamePrices() {
         });
       }
     }
-    console.log(`✅ Fetched ${inGameMap.size} in-game listed items.`);
+    console.log(`✅ Fetched ${inGameMap.size} in-game listed items (collectibles + wearables).`);
     fs.writeFileSync(path.join(ROOT_DIR, 'data', 'ingame_nfts.json'), JSON.stringify(data, null, 2), 'utf8');
   } catch (err) {
     console.warn('⚠️ Could not fetch in-game prices from API, checking local fallback:', err.message);
     const localFile = path.join(ROOT_DIR, 'data', 'ingame_nfts.json');
     if (fs.existsSync(localFile)) {
       const local = JSON.parse(fs.readFileSync(localFile, 'utf8'));
-      const list = local?.collectibles || local?.data || (Array.isArray(local) ? local : []);
+      const list = [];
+      if (Array.isArray(local)) {
+        list.push(...local);
+      } else if (local) {
+        if (Array.isArray(local.collectibles)) list.push(...local.collectibles);
+        if (Array.isArray(local.wearables)) list.push(...local.wearables);
+        if (Array.isArray(local.data)) list.push(...local.data);
+      }
       list.forEach(item => {
         if (item.id && item.floor) {
           inGameMap.set(String(item.id), {
