@@ -483,7 +483,8 @@ async function refreshVisibleItemFloors(items, maxCount = 8, force = false) {
 async function fetchLiveFlowerExchangeRate() {
   const targetUrl = 'https://sfl.world/api/v1.1/exchange';
   const urls = [
-    `https://cors-get-proxy.sirjosh.workers.dev/?url=${encodeURIComponent(targetUrl)}`
+    `https://cors-get-proxy.sirjosh.workers.dev/?url=${encodeURIComponent(targetUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`
   ];
 
   for (const u of urls) {
@@ -491,8 +492,9 @@ async function fetchLiveFlowerExchangeRate() {
       const res = await fetch(u, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
       if (res.ok) {
         const d = await res.json();
-        if (d?.sfl?.usd && Number(d.sfl.usd) > 0) {
-          return Number(d.sfl.usd);
+        const rate = d?.sfl?.usd || d?.data?.sfl?.usd;
+        if (rate && Number(rate) > 0) {
+          return Number(rate);
         }
       }
     } catch {}
@@ -502,12 +504,13 @@ async function fetchLiveFlowerExchangeRate() {
 
 /**
  * Live fetch for In-Game Marketplace listings directly from sfl.world
- * Queries real-time active listings with edge proxy fallback
+ * Queries real-time active listings (collectibles + wearables) with edge proxy fallback
  */
 async function fetchLiveInGameMarketplace() {
   const targetUrl = 'https://sfl.world/api/v1/nfts';
   const urls = [
-    `https://cors-get-proxy.sirjosh.workers.dev/?url=${encodeURIComponent(targetUrl)}`
+    `https://cors-get-proxy.sirjosh.workers.dev/?url=${encodeURIComponent(targetUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`
   ];
 
   for (const u of urls) {
@@ -515,9 +518,16 @@ async function fetchLiveInGameMarketplace() {
       const res = await fetch(u, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
       if (res.ok) {
         const d = await res.json();
-        const list = d?.collectibles || d?.data || (Array.isArray(d) ? d : null);
-        if (list && list.length > 0) {
-          return list;
+        let allInGame = [];
+        if (Array.isArray(d)) {
+          allInGame = d;
+        } else if (d) {
+          if (Array.isArray(d.collectibles)) allInGame.push(...d.collectibles);
+          if (Array.isArray(d.wearables)) allInGame.push(...d.wearables);
+          if (Array.isArray(d.data)) allInGame.push(...d.data);
+        }
+        if (allInGame.length > 0) {
+          return allInGame;
         }
       }
     } catch {}
@@ -545,12 +555,14 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
   try {
     const timestamp = Date.now();
     const noStore = { cache: 'no-store' };
+    const baseHref = window.location.href.split('?')[0].split('#')[0];
+    const feedBase = baseHref.endsWith('/') ? baseHref : baseHref.substring(0, baseHref.lastIndexOf('/') + 1);
 
     // 1. Concurrently fetch all data feeds + live sfl.world exchange API + live in-game marketplace + live ETH market price
     const [pricesRes, exchangeRes, inGameRes, directRate, liveInGameMarket, ethRes] = await Promise.allSettled([
-      fetch(`./data/prices.json?v=${timestamp}`, noStore).then(r => r.ok ? r.json() : null),
-      fetch(`./data/exchange.json?v=${timestamp}`, noStore).then(r => r.ok ? r.json() : null),
-      fetch(`./data/ingame_nfts.json?v=${timestamp}`, noStore).then(r => r.ok ? r.json() : null),
+      fetch(`${feedBase}data/prices.json?v=${timestamp}`, noStore).then(r => r.ok ? r.json() : null),
+      fetch(`${feedBase}data/exchange.json?v=${timestamp}`, noStore).then(r => r.ok ? r.json() : null),
+      fetch(`${feedBase}data/ingame_nfts.json?v=${timestamp}`, noStore).then(r => r.ok ? r.json() : null),
       fetchLiveFlowerExchangeRate(),
       fetchLiveInGameMarketplace(),
       fetch('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT', noStore).then(r => r.ok ? r.json() : null).catch(() => null)
@@ -771,69 +783,104 @@ function applyFiltersAndSort(checkLive = true) {
     result = result.filter(item => item.unlisted && (!item.inGameFloor || item.inGameFloor <= 0));
   }
 
+  // Helper to get precise Price Diff (Net Game - OpenSea Equiv)
+  const calcItemDiff = (item) => {
+    const isListed = !item.unlisted && ((item.rawPrice && item.rawPrice > 0) || (item.floorPrice && item.floorPrice > 0));
+    const hasInGame = item.inGameFloor != null && item.inGameFloor > 0;
+    if (!isListed || !hasInGame || !flowerUsdcRate || flowerUsdcRate <= 0) return null;
+    const openSeaSfl = (((item.rawPrice || item.floorPrice) * ethUsdPrice) / flowerUsdcRate);
+    const inGameNetSfl = item.inGameFloor * 0.9;
+    return inGameNetSfl - openSeaSfl;
+  };
+
   // 3. Sorting
   if (currentSort === 'diff_desc') {
     result.sort((a, b) => {
-      const aOS = (!a.unlisted && (a.rawPrice || a.floorPrice)) ? (((a.rawPrice || a.floorPrice) * ethUsdPrice) / (flowerUsdcRate || 1)) : null;
-      const aGame = (a.inGameFloor && a.inGameFloor > 0) ? (a.inGameFloor * 0.9) : null;
-      const aDiff = (aOS !== null && aGame !== null) ? (aGame - aOS) : -999999999;
-
-      const bOS = (!b.unlisted && (b.rawPrice || b.floorPrice)) ? (((b.rawPrice || b.floorPrice) * ethUsdPrice) / (flowerUsdcRate || 1)) : null;
-      const bGame = (b.inGameFloor && b.inGameFloor > 0) ? (b.inGameFloor * 0.9) : null;
-      const bDiff = (bOS !== null && bGame !== null) ? (bGame - bOS) : -999999999;
-
+      const aDiff = calcItemDiff(a);
+      const bDiff = calcItemDiff(b);
+      const aHas = aDiff !== null;
+      const bHas = bDiff !== null;
+      if (aHas && !bHas) return -1;
+      if (!aHas && bHas) return 1;
+      if (!aHas && !bHas) return (a.id - b.id);
       return bDiff - aDiff;
     });
   } else if (currentSort === 'diff_asc') {
     result.sort((a, b) => {
-      const aOS = (!a.unlisted && (a.rawPrice || a.floorPrice)) ? (((a.rawPrice || a.floorPrice) * ethUsdPrice) / (flowerUsdcRate || 1)) : null;
-      const aGame = (a.inGameFloor && a.inGameFloor > 0) ? (a.inGameFloor * 0.9) : null;
-      const aDiff = (aOS !== null && aGame !== null) ? (aGame - aOS) : 999999999;
-
-      const bOS = (!b.unlisted && (b.rawPrice || b.floorPrice)) ? (((b.rawPrice || b.floorPrice) * ethUsdPrice) / (flowerUsdcRate || 1)) : null;
-      const bGame = (b.inGameFloor && b.inGameFloor > 0) ? (b.inGameFloor * 0.9) : null;
-      const bDiff = (bOS !== null && bGame !== null) ? (bGame - bOS) : 999999999;
-
+      const aDiff = calcItemDiff(a);
+      const bDiff = calcItemDiff(b);
+      const aHas = aDiff !== null;
+      const bHas = bDiff !== null;
+      if (aHas && !bHas) return -1;
+      if (!aHas && bHas) return 1;
+      if (!aHas && !bHas) return (a.id - b.id);
       return aDiff - bDiff;
     });
   } else if (currentSort === 'recently_listed') {
     result.sort((a, b) => {
-      if (a.recentlyListed && !b.recentlyListed) return -1;
-      if (!a.recentlyListed && b.recentlyListed) return 1;
       const aTime = a.lastListedTimestamp || (a.orderCreatedAt ? a.orderCreatedAt * 1000 : 0);
       const bTime = b.lastListedTimestamp || (b.orderCreatedAt ? b.orderCreatedAt * 1000 : 0);
+      const aHas = aTime > 0;
+      const bHas = bTime > 0;
+      if (aHas && !bHas) return -1;
+      if (!aHas && bHas) return 1;
       return bTime - aTime;
     });
   } else if (currentSort === 'recently_sold') {
     result.sort((a, b) => {
-      if (a.recentlySold && !b.recentlySold) return -1;
-      if (!a.recentlySold && b.recentlySold) return 1;
       const aTime = a.lastSaleTimestamp || 0;
       const bTime = b.lastSaleTimestamp || 0;
+      const aHas = aTime > 0;
+      const bHas = bTime > 0;
+      if (aHas && !bHas) return -1;
+      if (!aHas && bHas) return 1;
       if (bTime !== aTime) return bTime - aTime;
       return (b.lastSalePrice || 0) - (a.lastSalePrice || 0);
     });
   } else if (currentSort === 'ingame_asc') {
     result.sort((a, b) => {
-      const aFloor = a.inGameFloor && a.inGameFloor > 0 ? a.inGameFloor : 999999999;
-      const bFloor = b.inGameFloor && b.inGameFloor > 0 ? b.inGameFloor : 999999999;
-      return aFloor - bFloor;
+      const aHas = a.inGameFloor != null && a.inGameFloor > 0;
+      const bHas = b.inGameFloor != null && b.inGameFloor > 0;
+      if (aHas && !bHas) return -1;
+      if (!aHas && bHas) return 1;
+      if (!aHas && !bHas) return (a.id - b.id);
+      return a.inGameFloor - b.inGameFloor;
     });
   } else if (currentSort === 'ingame_desc') {
-    result.sort((a, b) => (b.inGameFloor || 0) - (a.inGameFloor || 0));
+    result.sort((a, b) => {
+      const aHas = a.inGameFloor != null && a.inGameFloor > 0;
+      const bHas = b.inGameFloor != null && b.inGameFloor > 0;
+      if (aHas && !bHas) return -1;
+      if (!aHas && bHas) return 1;
+      if (!aHas && !bHas) return (a.id - b.id);
+      return b.inGameFloor - a.inGameFloor;
+    });
   } else if (currentSort === 'last_sale_desc') {
-    result.sort((a, b) => (b.lastSalePrice || 0) - (a.lastSalePrice || 0));
+    result.sort((a, b) => {
+      const aHas = a.lastSalePrice != null && a.lastSalePrice > 0;
+      const bHas = b.lastSalePrice != null && b.lastSalePrice > 0;
+      if (aHas && !bHas) return -1;
+      if (!aHas && bHas) return 1;
+      if (!aHas && !bHas) return (a.id - b.id);
+      return b.lastSalePrice - a.lastSalePrice;
+    });
   } else if (currentSort === 'price_asc') {
     result.sort((a, b) => {
-      if (a.unlisted && !b.unlisted) return 1;
-      if (!a.unlisted && b.unlisted) return -1;
-      return (a.rawPrice || a.floorPrice || 0) - (b.rawPrice || b.floorPrice || 0);
+      const aListed = !a.unlisted && ((a.rawPrice && a.rawPrice > 0) || (a.floorPrice && a.floorPrice > 0));
+      const bListed = !b.unlisted && ((b.rawPrice && b.rawPrice > 0) || (b.floorPrice && b.floorPrice > 0));
+      if (aListed && !bListed) return -1;
+      if (!aListed && bListed) return 1;
+      if (!aListed && !bListed) return (a.id - b.id);
+      return (a.rawPrice || a.floorPrice) - (b.rawPrice || b.floorPrice);
     });
   } else if (currentSort === 'price_desc') {
     result.sort((a, b) => {
-      if (a.unlisted && !b.unlisted) return 1;
-      if (!a.unlisted && b.unlisted) return -1;
-      return (b.rawPrice || b.floorPrice || 0) - (a.rawPrice || a.floorPrice || 0);
+      const aListed = !a.unlisted && ((a.rawPrice && a.rawPrice > 0) || (a.floorPrice && a.floorPrice > 0));
+      const bListed = !b.unlisted && ((b.rawPrice && b.rawPrice > 0) || (b.floorPrice && b.floorPrice > 0));
+      if (aListed && !bListed) return -1;
+      if (!aListed && bListed) return 1;
+      if (!aListed && !bListed) return (a.id - b.id);
+      return (b.rawPrice || b.floorPrice) - (a.rawPrice || a.floorPrice);
     });
   } else if (currentSort === 'supply_desc') {
     result.sort((a, b) => (b.supply || 0) - (a.supply || 0));
