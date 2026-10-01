@@ -1,7 +1,6 @@
 /**
- * Unified Price Updater
- * Fetches fresh OpenSea listings, recent listing events, recent sales,
- * in-game marketplace floors, and live FLOWER -> USDC exchange rate.
+ * Unified Multi-Collection Price Updater
+ * Supports both Sunflower Land Collectibles & Bumpkin Wearables NFT contracts on Polygon!
  *
  * Usage:
  *   node scripts/update-prices.js [OPENSEA_API_KEY]
@@ -13,9 +12,26 @@ const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 
 const OPENSEA_API_KEY = process.env.OPENSEA_API_KEY || process.argv[2] || 'add815580a904473ba7f162c0ccc4926';
-const COLLECTION_SLUG = 'sunflower-land-collectibles';
-const CONTRACT_ADDRESS = '0x22d5f9b75c524fec1d6619787e582644cd4d7422';
 const ROOT_DIR = path.resolve(__dirname, '..');
+
+const COLLECTIONS = {
+  collectibles: {
+    key: 'collectibles',
+    slug: 'sunflower-land-collectibles',
+    contract: '0x22d5f9b75c524fec1d6619787e582644cd4d7422',
+    name: 'Sunflower Land Collectibles'
+  },
+  wearables: {
+    key: 'wearables',
+    slug: 'bumpkin-wearables',
+    contract: '0x4bb5b2461e9ef782152c3a96698b2a4cf55b6162',
+    name: 'Bumpkin Wearables'
+  }
+};
+
+function makeItemKey(collection, id) {
+  return `${collection}_${id}`;
+}
 
 function isResourceToken(id) {
   const num = Number(id);
@@ -66,67 +82,94 @@ async function fetchExchangeRate() {
   }
 }
 
-// 2. Fetch live In-Game Marketplace Prices
+// 2. Fetch live In-Game Marketplace Prices for Collectibles & Wearables
 async function fetchInGamePrices() {
-  console.log('🎮 Fetching live in-game marketplace prices...');
+  console.log('🎮 Fetching live in-game marketplace prices (collectibles + wearables)...');
   const inGameMap = new Map();
   try {
     const data = await fetchWithRetry('https://sfl.world/api/v1/nfts');
-    const list = [];
-    if (Array.isArray(data)) {
-      list.push(...data);
-    } else if (data) {
-      if (Array.isArray(data.collectibles)) list.push(...data.collectibles);
-      if (Array.isArray(data.wearables)) list.push(...data.wearables);
-      if (Array.isArray(data.data)) list.push(...data.data);
-    }
-    for (const item of list) {
-      if (item.id && item.floor) {
-        inGameMap.set(String(item.id), {
-          floor: Number(item.floor),
-          lastSalePrice: item.lastSalePrice ? Number(item.lastSalePrice) : 0,
-          supply: item.supply ? Number(item.supply) : 1,
-          haveBoost: item.have_boost === 1,
-          boostText: item.boost_text || '',
-          name: item.name || ''
-        });
+    if (data) {
+      if (Array.isArray(data.collectibles)) {
+        for (const item of data.collectibles) {
+          if (item.id != null) {
+            inGameMap.set(makeItemKey('collectibles', item.id), {
+              id: Number(item.id),
+              collection: 'collectibles',
+              floor: item.floor != null ? Number(item.floor) : null,
+              lastSalePrice: item.lastSalePrice ? Number(item.lastSalePrice) : 0,
+              supply: item.supply ? Number(item.supply) : 1,
+              haveBoost: item.have_boost === 1,
+              boostText: item.boost_text || '',
+              name: item.name || ''
+            });
+          }
+        }
+      }
+      if (Array.isArray(data.wearables)) {
+        for (const item of data.wearables) {
+          if (item.id != null) {
+            inGameMap.set(makeItemKey('wearables', item.id), {
+              id: Number(item.id),
+              collection: 'wearables',
+              floor: item.floor != null ? Number(item.floor) : null,
+              lastSalePrice: item.lastSalePrice ? Number(item.lastSalePrice) : 0,
+              supply: item.supply ? Number(item.supply) : 1,
+              haveBoost: item.have_boost === 1,
+              boostText: item.boost_text || '',
+              name: item.name || ''
+            });
+          }
+        }
       }
     }
-    console.log(`✅ Fetched ${inGameMap.size} in-game listed items (collectibles + wearables).`);
+    console.log(`✅ Fetched ${inGameMap.size} in-game listed items.`);
     fs.writeFileSync(path.join(ROOT_DIR, 'data', 'ingame_nfts.json'), JSON.stringify(data, null, 2), 'utf8');
   } catch (err) {
     console.warn('⚠️ Could not fetch in-game prices from API, checking local fallback:', err.message);
     const localFile = path.join(ROOT_DIR, 'data', 'ingame_nfts.json');
     if (fs.existsSync(localFile)) {
       const local = JSON.parse(fs.readFileSync(localFile, 'utf8'));
-      const list = [];
-      if (Array.isArray(local)) {
-        list.push(...local);
-      } else if (local) {
-        if (Array.isArray(local.collectibles)) list.push(...local.collectibles);
-        if (Array.isArray(local.wearables)) list.push(...local.wearables);
-        if (Array.isArray(local.data)) list.push(...local.data);
+      if (Array.isArray(local.collectibles)) {
+        local.collectibles.forEach(item => {
+          if (item.id != null) {
+            inGameMap.set(makeItemKey('collectibles', item.id), {
+              id: Number(item.id),
+              collection: 'collectibles',
+              floor: item.floor != null ? Number(item.floor) : null,
+              lastSalePrice: item.lastSalePrice ? Number(item.lastSalePrice) : 0,
+              supply: item.supply ? Number(item.supply) : 1,
+              haveBoost: item.have_boost === 1,
+              boostText: item.boost_text || '',
+              name: item.name || ''
+            });
+          }
+        });
       }
-      list.forEach(item => {
-        if (item.id && item.floor) {
-          inGameMap.set(String(item.id), {
-            floor: Number(item.floor),
-            lastSalePrice: item.lastSalePrice ? Number(item.lastSalePrice) : 0,
-            supply: item.supply ? Number(item.supply) : 1,
-            haveBoost: item.have_boost === 1,
-            boostText: item.boost_text || '',
-            name: item.name || ''
-          });
-        }
-      });
+      if (Array.isArray(local.wearables)) {
+        local.wearables.forEach(item => {
+          if (item.id != null) {
+            inGameMap.set(makeItemKey('wearables', item.id), {
+              id: Number(item.id),
+              collection: 'wearables',
+              floor: item.floor != null ? Number(item.floor) : null,
+              lastSalePrice: item.lastSalePrice ? Number(item.lastSalePrice) : 0,
+              supply: item.supply ? Number(item.supply) : 1,
+              haveBoost: item.have_boost === 1,
+              boostText: item.boost_text || '',
+              name: item.name || ''
+            });
+          }
+        });
+      }
     }
   }
   return inGameMap;
 }
 
 // Helper to fetch best floor with automatic rate-limit backoff
-async function fetchBestFloorWithRetry(id, maxRetries = 4) {
-  const url = `https://api.opensea.io/api/v2/listings/collection/${COLLECTION_SLUG}/nfts/${id}/best`;
+async function fetchBestFloorWithRetry(collection, id, maxRetries = 4) {
+  const colSlug = COLLECTIONS[collection]?.slug || COLLECTIONS.collectibles.slug;
+  const url = `https://api.opensea.io/api/v2/listings/collection/${colSlug}/nfts/${id}/best`;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const res = await fetch(url, {
@@ -158,25 +201,31 @@ async function fetchBestFloorWithRetry(id, maxRetries = 4) {
 }
 
 // Verify exact OpenSea floor price for in-game traded items directly via /nfts/{id}/best
-async function verifyOpenSeaFloorsForInGameItems(inGameMap, listingsByToken, verifiedUnlistedIds) {
-  console.log(`🔍 Verifying live OpenSea floors for ${inGameMap.size} in-game active items...`);
-  const ids = Array.from(inGameMap.keys());
+async function verifyOpenSeaFloorsForInGameItems(inGameMap, listingsByKey, verifiedUnlistedKeys) {
+  console.log(`🔍 Verifying live OpenSea floors for ${inGameMap.size} in-game active items across collections...`);
+  const keys = Array.from(inGameMap.keys());
   const batchSize = 4;
   let verifiedCount = 0;
 
-  for (let i = 0; i < ids.length; i += batchSize) {
-    const chunk = ids.slice(i, i + batchSize);
-    await Promise.all(chunk.map(async (id) => {
+  for (let i = 0; i < keys.length; i += batchSize) {
+    const chunk = keys.slice(i, i + batchSize);
+    await Promise.all(chunk.map(async (key) => {
+      const itemInfo = inGameMap.get(key);
+      if (!itemInfo) return;
       try {
-        const res = await fetchBestFloorWithRetry(id);
+        const res = await fetchBestFloorWithRetry(itemInfo.collection, itemInfo.id);
         if (!res) return;
         if (res.status === 404) {
-          verifiedUnlistedIds.add(String(id));
-          verifiedUnlistedIds.add(Number(id));
+          verifiedUnlistedKeys.add(key);
           return;
         }
 
         const data = res.data;
+        if (data?.status && data.status !== 'ACTIVE') {
+          verifiedUnlistedKeys.add(key);
+          return;
+        }
+
         const cur = data?.price?.current?.currency || 'WETH';
         const dec = data?.price?.current?.decimals != null ? data.price.current.decimals : 18;
         const totalVal = data?.price?.current?.value ? (Number(data.price.current.value) / Math.pow(10, dec)) : 0;
@@ -184,7 +233,7 @@ async function verifyOpenSeaFloorsForInGameItems(inGameMap, listingsByToken, ver
         const startAmount = Number(offer?.startAmount || '1');
 
         let unitPrice = totalVal;
-        if (isResourceToken(id)) {
+        if (itemInfo.collection === 'collectibles' && isResourceToken(itemInfo.id)) {
           if (startAmount < 1e18) return;
           unitPrice = totalVal / (startAmount / 1e18);
           if (unitPrice < 0.00001 || unitPrice > 500) return;
@@ -199,90 +248,26 @@ async function verifyOpenSeaFloorsForInGameItems(inGameMap, listingsByToken, ver
             currency: cur,
             orderCreatedAt: data?.order_created_at || 0
           };
-          listingsByToken.set(String(id), [entry]);
-          listingsByToken.set(Number(id), [entry]);
+          listingsByKey.set(key, [entry]);
           verifiedCount++;
         }
       } catch {}
     }));
-    process.stdout.write(`  Verified ${Math.min(i + batchSize, ids.length)}/${ids.length} in-game items (${verifiedCount} listed on OS)\r`);
+    process.stdout.write(`  Verified ${Math.min(i + batchSize, keys.length)}/${keys.length} items (${verifiedCount} listed on OS)\r`);
     await sleep(200);
   }
   console.log(`\n✅ Verified ${verifiedCount} in-game items actively listed on OpenSea.`);
 }
 
-// 3. Fetch all OpenSea active listings
-async function fetchAllOpenSeaListings() {
-  console.log('🌊 Fetching all active listings from OpenSea API...');
-  const listingsByToken = new Map();
-  let next = '';
-  let page = 1;
-  let totalListings = 0;
-
-  while (true) {
-    let url = `https://api.opensea.io/api/v2/listings/collection/${COLLECTION_SLUG}/all?limit=100`;
-    if (next) url += `&next=${encodeURIComponent(next)}`;
-
-    try {
-      const data = await fetchWithRetry(url, { 'x-api-key': OPENSEA_API_KEY });
-      const batch = data.listings || [];
-      totalListings += batch.length;
-
-      for (const l of batch) {
-        const offer = l.protocol_data?.parameters?.offer?.[0];
-        const id = offer?.identifierOrCriteria;
-        if (!id) continue;
-
-        const cur = l.price?.current?.currency || 'WETH';
-        const dec = l.price?.current?.decimals != null ? l.price.current.decimals : 18;
-        const totalVal = l.price?.current?.value ? (Number(l.price.current.value) / Math.pow(10, dec)) : 0;
-        const startAmount = Number(offer?.startAmount || '1');
-
-        let unitPrice = totalVal;
-        if (isResourceToken(id)) {
-          // Resources have 18 decimals in the Sunflower Land contract
-          if (startAmount < 1e18) continue; // Skip micro-dust orders (<1 whole item)
-          unitPrice = totalVal / (startAmount / 1e18);
-          if (unitPrice < 0.00001 || unitPrice > 500) continue; // Skip spam orders
-        } else {
-          unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
-          if (unitPrice < 0.000001) continue; // Skip micro-dust
-        }
-
-        if (!listingsByToken.has(id)) {
-          listingsByToken.set(id, []);
-        }
-        listingsByToken.get(id).push({
-          unitPrice,
-          currency: cur,
-          orderCreatedAt: l.order_created_at
-        });
-      }
-
-      process.stdout.write(`  Page ${page}: got ${batch.length} listings | Total: ${totalListings} | Tokens: ${listingsByToken.size}\r`);
-
-      if (!data.next || batch.length === 0) break;
-      next = data.next;
-      page++;
-      await sleep(150);
-    } catch (err) {
-      console.error(`\n❌ Error fetching OpenSea listings page ${page}:`, err.message);
-      break;
-    }
-  }
-
-  console.log(`\n✅ Finished OpenSea listings: ${totalListings} listings across ${listingsByToken.size} tokens.`);
-  return listingsByToken;
-}
-
-// 4. Fetch real-time Recent Listing Events
-async function fetchRecentListingEvents() {
-  console.log('⚡ Fetching real-time recent listing events from OpenSea...');
+// Fetch real-time Recent Listing Events for a specific collection
+async function fetchRecentListingEvents(collection = 'collectibles') {
+  const colSlug = COLLECTIONS[collection]?.slug || COLLECTIONS.collectibles.slug;
+  console.log(`⚡ Fetching recent listing events for ${colSlug}...`);
   const recentListings = new Map();
   let next = '';
 
   for (let page = 1; page <= 3; page++) {
-    let url = `https://api.opensea.io/api/v2/events/collection/${COLLECTION_SLUG}?event_type=listing&limit=50`;
+    let url = `https://api.opensea.io/api/v2/events/collection/${colSlug}?event_type=listing&limit=50`;
     if (next) url += `&next=${encodeURIComponent(next)}`;
 
     try {
@@ -293,12 +278,13 @@ async function fetchRecentListingEvents() {
         const id = String(ev.asset?.identifier || '');
         if (!id) continue;
 
+        const key = makeItemKey(collection, id);
         const dec = ev.payment?.decimals || 18;
         const price = ev.payment?.quantity ? (Number(ev.payment.quantity) / Math.pow(10, dec)) : 0;
         const timestampMs = (ev.event_timestamp || 0) * 1000;
 
-        if (!recentListings.has(id) || timestampMs > recentListings.get(id).timestampMs) {
-          recentListings.set(id, {
+        if (!recentListings.has(key) || timestampMs > recentListings.get(key).timestampMs) {
+          recentListings.set(key, {
             recentlyListed: true,
             timestampMs,
             price,
@@ -311,23 +297,24 @@ async function fetchRecentListingEvents() {
       next = data.next;
       await sleep(150);
     } catch (err) {
-      console.error('Error fetching recent listing events:', err.message);
+      console.error(`Error fetching recent listing events for ${colSlug}:`, err.message);
       break;
     }
   }
 
-  console.log(`✅ Found ${recentListings.size} recently listed tokens.`);
+  console.log(`✅ Found ${recentListings.size} recently listed ${collection}.`);
   return recentListings;
 }
 
-// 5. Fetch real-time Recent Sale Events
-async function fetchRecentSaleEvents() {
-  console.log('🔥 Fetching real-time recent sale events from OpenSea...');
+// Fetch real-time Recent Sale Events for a specific collection
+async function fetchRecentSaleEvents(collection = 'collectibles') {
+  const colSlug = COLLECTIONS[collection]?.slug || COLLECTIONS.collectibles.slug;
+  console.log(`🔥 Fetching recent sale events for ${colSlug}...`);
   const recentSales = new Map();
   let next = '';
 
   for (let page = 1; page <= 3; page++) {
-    let url = `https://api.opensea.io/api/v2/events/collection/${COLLECTION_SLUG}?event_type=sale&limit=50`;
+    let url = `https://api.opensea.io/api/v2/events/collection/${colSlug}?event_type=sale&limit=50`;
     if (next) url += `&next=${encodeURIComponent(next)}`;
 
     try {
@@ -338,12 +325,13 @@ async function fetchRecentSaleEvents() {
         const id = String(ev.asset?.identifier || ev.nft?.identifier || '');
         if (!id) continue;
 
+        const key = makeItemKey(collection, id);
         const dec = ev.payment?.decimals || 18;
         const price = ev.payment?.quantity ? (Number(ev.payment.quantity) / Math.pow(10, dec)) : 0;
         const timestampMs = (ev.event_timestamp || 0) * 1000;
 
-        if (!recentSales.has(id) || timestampMs > recentSales.get(id).timestampMs) {
-          recentSales.set(id, {
+        if (!recentSales.has(key) || timestampMs > recentSales.get(key).timestampMs) {
+          recentSales.set(key, {
             recentlySold: true,
             timestampMs,
             price,
@@ -356,50 +344,53 @@ async function fetchRecentSaleEvents() {
       next = data.next;
       await sleep(150);
     } catch (err) {
-      console.error('Error fetching recent sale events:', err.message);
+      console.error(`Error fetching recent sale events for ${colSlug}:`, err.message);
       break;
     }
   }
 
-  console.log(`✅ Found ${recentSales.size} recently sold tokens.`);
+  console.log(`✅ Found ${recentSales.size} recently sold ${collection}.`);
   return recentSales;
 }
 
 async function main() {
-  console.log('🚀 Starting fresh price update...\n');
+  console.log('🚀 Starting fresh multi-collection price update...\n');
 
   const flowerRate = await fetchExchangeRate();
   const inGameMap = await fetchInGamePrices();
-  const listingsByToken = new Map();
-  const verifiedUnlistedIds = new Set();
+  const listingsByKey = new Map();
+  const verifiedUnlistedKeys = new Set();
 
   // 1. Verify exact live OpenSea floors for all active in-game traded items
-  await verifyOpenSeaFloorsForInGameItems(inGameMap, listingsByToken, verifiedUnlistedIds);
+  await verifyOpenSeaFloorsForInGameItems(inGameMap, listingsByKey, verifiedUnlistedKeys);
 
-  // 2. Fetch recent listing and sale events from OpenSea
-  const [recentListings, recentSales] = await Promise.all([
-    fetchRecentListingEvents(),
-    fetchRecentSaleEvents()
+  // 2. Fetch recent listing and sale events for both Collectibles & Wearables
+  const [colListings, colSales, wearListings, wearSales] = await Promise.all([
+    fetchRecentListingEvents('collectibles'),
+    fetchRecentSaleEvents('collectibles'),
+    fetchRecentListingEvents('wearables'),
+    fetchRecentSaleEvents('wearables')
   ]);
 
-  // 3. Immediately re-verify floor for all recently sold & recently listed items via /best
-  const activityIds = new Set([...Array.from(recentSales.keys()), ...Array.from(recentListings.keys())]);
-  console.log(`🔍 Verifying live OpenSea floors for ${activityIds.size} tokens with recent activity...`);
-  for (const actId of activityIds) {
+  const recentListings = new Map([...colListings, ...wearListings]);
+  const recentSales = new Map([...colSales, ...wearSales]);
+
+  // 3. Immediately re-verify floor for tokens with recent activity
+  const activityKeys = new Set([...Array.from(recentSales.keys()), ...Array.from(recentListings.keys())]);
+  console.log(`🔍 Verifying live OpenSea floors for ${activityKeys.size} tokens with recent activity...`);
+  for (const actKey of activityKeys) {
+    const [col, idStr] = actKey.split('_');
+    const actId = Number(idStr);
     try {
-      const res = await fetchBestFloorWithRetry(actId);
+      const res = await fetchBestFloorWithRetry(col, actId);
       if (res?.status === 404) {
-        verifiedUnlistedIds.add(String(actId));
-        verifiedUnlistedIds.add(Number(actId));
-        listingsByToken.delete(String(actId));
-        listingsByToken.delete(Number(actId));
+        verifiedUnlistedKeys.add(actKey);
+        listingsByKey.delete(actKey);
       } else if (res?.status === 200 && res.data) {
         const data = res.data;
         if (data?.status && data.status !== 'ACTIVE') {
-          verifiedUnlistedIds.add(String(actId));
-          verifiedUnlistedIds.add(Number(actId));
-          listingsByToken.delete(String(actId));
-          listingsByToken.delete(Number(actId));
+          verifiedUnlistedKeys.add(actKey);
+          listingsByKey.delete(actKey);
           continue;
         }
 
@@ -410,7 +401,7 @@ async function main() {
         const startAmount = Number(offer?.startAmount || '1');
 
         let unitPrice = totalVal;
-        if (isResourceToken(actId)) {
+        if (col === 'collectibles' && isResourceToken(actId)) {
           if (startAmount >= 1e18) {
             unitPrice = totalVal / (startAmount / 1e18);
           }
@@ -424,45 +415,62 @@ async function main() {
             currency: cur,
             orderCreatedAt: data?.order_created_at || 0
           };
-          listingsByToken.set(String(actId), [entry]);
-          listingsByToken.set(Number(actId), [entry]);
+          listingsByKey.set(actKey, [entry]);
         } else {
-          verifiedUnlistedIds.add(String(actId));
-          verifiedUnlistedIds.add(Number(actId));
-          listingsByToken.delete(String(actId));
-          listingsByToken.delete(Number(actId));
+          verifiedUnlistedKeys.add(actKey);
+          listingsByKey.delete(actKey);
         }
       }
     } catch {}
     await sleep(150);
   }
 
-  // Load known official IDs
+  // Load known official Collectibles IDs
   const knownIdsPath = path.join(ROOT_DIR, 'scripts', 'known_ids.json');
   const knownIds = JSON.parse(fs.readFileSync(knownIdsPath, 'utf8'));
 
-  // Load existing metadata (boosts, etc.)
+  // Load existing metadata from prices.json
   const existingPricesPath = path.join(ROOT_DIR, 'data', 'prices.json');
   const existingPrices = fs.existsSync(existingPricesPath) ? JSON.parse(fs.readFileSync(existingPricesPath, 'utf8')) : { items: [] };
   const existingMap = new Map();
-  (existingPrices.items || []).forEach(i => existingMap.set(String(i.id), i));
+  (existingPrices.items || []).forEach(i => {
+    const col = i.collection || 'collectibles';
+    existingMap.set(makeItemKey(col, i.id), i);
+  });
 
-  const allIds = new Set([
-    ...Object.keys(knownIds).map(k => String(k)),
-    ...Array.from(listingsByToken.keys()).map(k => String(k)),
-    ...Array.from(inGameMap.keys()).map(k => String(k)),
-    ...Array.from(existingMap.keys()).map(k => String(k))
+  // Build complete unified set of unique composite keys
+  const allKeys = new Set([
+    // All known collectibles
+    ...Object.keys(knownIds).map(k => makeItemKey('collectibles', k)),
+    // All in-game collectibles and wearables
+    ...Array.from(inGameMap.keys()),
+    // All active OpenSea listings
+    ...Array.from(listingsByKey.keys()),
+    // All existing keys
+    ...Array.from(existingMap.keys())
   ]);
 
   const items = [];
 
-  for (const idStr of allIds) {
+  for (const itemKey of allKeys) {
+    const [collection, idStr] = itemKey.split('_');
     const numId = parseInt(idStr, 10);
-    const inGameInfo = inGameMap.get(idStr);
-    const existing = existingMap.get(idStr) || {};
-    const officialName = (inGameInfo && inGameInfo.name) ? inGameInfo.name : (knownIds[numId] || existing.name || `Sunflower Land #${numId}`);
+    const colConfig = COLLECTIONS[collection] || COLLECTIONS.collectibles;
+    const inGameInfo = inGameMap.get(itemKey);
+    const existing = existingMap.get(itemKey) || {};
 
-    const tokenListings = listingsByToken.get(idStr) || listingsByToken.get(numId) || [];
+    let officialName = '';
+    if (inGameInfo && inGameInfo.name) {
+      officialName = inGameInfo.name;
+    } else if (collection === 'collectibles' && knownIds[numId]) {
+      officialName = knownIds[numId];
+    } else if (existing.name) {
+      officialName = existing.name;
+    } else {
+      officialName = collection === 'wearables' ? `Wearable #${numId}` : `Sunflower Land #${numId}`;
+    }
+
+    const tokenListings = listingsByKey.get(itemKey) || [];
     let isListed = tokenListings.length > 0;
     let rawPrice = 0;
     let floorPrice = 0;
@@ -477,17 +485,16 @@ async function main() {
       orderCreatedAt = Math.max(...tokenListings.map(l => l.orderCreatedAt || 0));
     }
 
-    const rl = recentListings.get(idStr);
+    const rl = recentListings.get(itemKey);
     const recentlyListed = Boolean(rl);
     const lastListedTimestamp = rl ? rl.timestampMs : (existing.recentlyListed ? existing.lastListedTimestamp : 0);
     const lastListedPrice = rl ? rl.price : (existing.recentlyListed ? existing.lastListedPrice : 0);
 
-    const rs = recentSales.get(idStr) || (existing.recentlySold ? { timestampMs: existing.lastSaleTimestamp, price: existing.lastSalePrice, currency: existing.lastSaleCurrency } : null);
+    const rs = recentSales.get(itemKey) || (existing.recentlySold ? { timestampMs: existing.lastSaleTimestamp, price: existing.lastSalePrice, currency: existing.lastSaleCurrency } : null);
     const recentlySold = Boolean(rs);
     const lastSalePrice = rs ? rs.price : 0;
     const lastSaleCurrency = rs ? (rs.currency || 'WETH') : 'WETH';
     const lastSaleTimestamp = rs ? rs.timestampMs : 0;
-
 
     let inGameFloor = inGameInfo ? inGameInfo.floor : (inGameMap.size > 20 ? null : (existing.inGameFloor || null));
     if (inGameFloor) inGameFloor = Number(inGameFloor.toFixed(4));
@@ -498,7 +505,12 @@ async function main() {
     const supply = (inGameInfo && inGameInfo.supply > 1) ? inGameInfo.supply : (existing.supply || 1);
 
     items.push({
+      key: itemKey,
       id: numId,
+      collection: collection,
+      collectionName: colConfig.name,
+      collectionSlug: colConfig.slug,
+      contractAddress: colConfig.contract,
       name: officialName,
       rawPrice,
       floorPrice,
@@ -517,7 +529,7 @@ async function main() {
       orderCreatedAt,
       inGameFloor,
       inGameFloorUsdc,
-      openseaUrl: `https://opensea.io/assets/polygon/${CONTRACT_ADDRESS}/${numId}`
+      openseaUrl: `https://opensea.io/assets/polygon/${colConfig.contract}/${numId}`
     });
   }
 
