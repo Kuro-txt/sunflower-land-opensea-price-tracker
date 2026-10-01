@@ -1,5 +1,5 @@
 // Sunflower Land OpenSea Price Tracker Client Application
-// Sourced directly from OpenSea API v2
+// Supports both Sunflower Land Collectibles & Bumpkin Wearables NFT contracts on Polygon!
 
 // Preference management helpers for remembering user configuration
 function getSavedPreference(key, fallback, allowedList) {
@@ -18,9 +18,24 @@ function savePreference(key, value) {
   } catch {}
 }
 
-const ALLOWED_FILTERS = ['all', 'diff', 'boost', 'without-boost', 'no-boost', 'recently-listed', 'cosmetic'];
+const ALLOWED_FILTERS = ['all', 'collectibles', 'wearables', 'diff', 'boost', 'without-boost', 'no-boost', 'recently-listed', 'cosmetic'];
 const ALLOWED_SORTS = ['diff_desc', 'diff_asc', 'price_asc', 'price_desc', 'ingame_asc', 'ingame_desc', 'recently_listed', 'recently_sold', 'last_sale_desc', 'supply_desc', 'supply_asc', 'name_asc'];
 const ALLOWED_VIEWS = ['grid', 'table'];
+
+const COLLECTIONS = {
+  collectibles: {
+    key: 'collectibles',
+    slug: 'sunflower-land-collectibles',
+    contract: '0x22d5f9b75c524fec1d6619787e582644cd4d7422',
+    name: 'Collectibles'
+  },
+  wearables: {
+    key: 'wearables',
+    slug: 'bumpkin-wearables',
+    contract: '0x4bb5b2461e9ef782152c3a96698b2a4cf55b6162',
+    name: 'Wearables'
+  }
+};
 
 let allItems = [];
 let filteredItems = [];
@@ -34,13 +49,35 @@ let customApiKey = localStorage.getItem('opensea_api_key') || 'add815580a904473b
 
 // Live ETH price in USD (auto-updated from live market API)
 let ethUsdPrice = 2500;
-const OPENSEA_CONTRACT_ADDRESS = '0x22d5f9b75c524fec1d6619787e582644cd4d7422';
 
 /**
- * Generate official OpenSea item URL on Polygon
+ * Get unique composite item key (e.g. "collectibles_481" vs "wearables_481")
  */
-function getOpenSeaUrl(itemId) {
-  return `https://opensea.io/assets/polygon/${OPENSEA_CONTRACT_ADDRESS}/${itemId}`;
+function getItemKey(item) {
+  if (!item) return '';
+  if (typeof item === 'string') return item;
+  if (item.key) return item.key;
+  const col = item.collection || 'collectibles';
+  return `${col}_${item.id}`;
+}
+
+/**
+ * Generate official OpenSea item URL on Polygon (routing accurately to Collectibles vs Wearables)
+ */
+function getOpenSeaUrl(item) {
+  if (typeof item === 'object' && item !== null) {
+    if (item.openseaUrl) return item.openseaUrl;
+    const col = item.collection === 'wearables' ? 'wearables' : 'collectibles';
+    const contract = item.contractAddress || COLLECTIONS[col].contract;
+    return `https://opensea.io/assets/polygon/${contract}/${item.id}`;
+  }
+  return `https://opensea.io/assets/polygon/0x22d5f9b75c524fec1d6619787e582644cd4d7422/${item}`;
+}
+
+function isResourceToken(id, collection = 'collectibles') {
+  if (collection !== 'collectibles') return false;
+  const num = Number(id);
+  return (num >= 201 && num <= 220) || (num >= 601 && num <= 605) || (num >= 301 && num <= 304);
 }
 
 // DOM Elements
@@ -183,7 +220,7 @@ function showLoading(show) {
 }
 
 /**
- * Compute stats on client side from OpenSea items array
+ * Compute stats on client side from items array
  */
 function computeClientStats(items, provider = 'OpenSea + In-Game', lastUpdated = new Date(), flowerRate = flowerUsdcRate) {
   const listedWithPrice = items.filter(i => !i.unlisted && i.rawPrice > 0.000000001);
@@ -199,43 +236,33 @@ function computeClientStats(items, provider = 'OpenSea + In-Game', lastUpdated =
     statFlowerRate.textContent = '$' + (flowerRate || flowerUsdcRate).toFixed(4);
   }
   if (statInGameCount) {
-    statInGameCount.textContent = inGameListed.length;
+    statInGameCount.textContent = inGameListed.length.toLocaleString();
   }
-  if (statTotalItems) statTotalItems.textContent = items.length;
-  if (statBoostCount) statBoostCount.textContent = boostCount;
-  if (statProvider) statProvider.textContent = provider;
-
-  const time = new Date(lastUpdated);
+  if (statTotalItems) {
+    statTotalItems.textContent = items.length.toLocaleString();
+  }
+  if (statBoostCount) {
+    statBoostCount.textContent = boostCount.toLocaleString();
+  }
+  if (statProvider) {
+    statProvider.textContent = provider;
+  }
   if (statLastUpdated) {
-    statLastUpdated.textContent = isNaN(time.getTime()) ? 'Just now' : time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const d = lastUpdated instanceof Date ? lastUpdated : new Date(lastUpdated);
+    statLastUpdated.textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   }
 }
 
-/**
- * Resource token check for Sunflower Land ERC-1155 contract
- * Resources have 18 decimals in the contract, whereas collectibles have 0 decimals.
- */
-function isResourceToken(id) {
-  const num = Number(id);
-  return (num >= 201 && num <= 220) || (num >= 601 && num <= 605) || (num >= 301 && num <= 304);
-}
-
-// In-memory cache for live verified floors to prevent redundant OpenSea queries
+// Memory Cache & Request Queue for OpenSea API
 const liveFloorCache = new Map();
 let isBatchVerifying = false;
-
-// Track tokens user clicked to purchase on OpenSea for instant re-verification
 const pendingPurchaseTokenIds = new Set();
 
-/**
- * Polite Rate Limiter & Circuit Breaker for OpenSea API v2 requests
- * Guarantees minimum spacing between calls and stops all requests during 429 cooldown
- */
 const OpenSeaRateLimiter = {
   queue: [],
   processing: false,
   rateLimitUntil: 0,
-  minDelayMs: 280, // ~3.5 req/sec (safely below OpenSea standard threshold)
+  minDelayMs: 350,
   lastRequestTime: 0,
 
   isRateLimited() {
@@ -264,7 +291,6 @@ const OpenSeaRateLimiter = {
     while (this.queue.length > 0) {
       const now = Date.now();
       if (now < this.rateLimitUntil) {
-        // Rate limit active: drop remaining tasks to avoid hammering OpenSea WAF
         const remaining = this.queue.splice(0);
         remaining.forEach(t => t.resolve({ rateLimited: true }));
         break;
@@ -291,7 +317,7 @@ const OpenSeaRateLimiter = {
   },
 
   handleRateLimit() {
-    this.rateLimitUntil = Date.now() + 30000; // 30-second cooldown
+    this.rateLimitUntil = Date.now() + 30000;
     console.warn('⚠️ OpenSea 429 Too Many Requests detected. Pausing client live checks for 30s.');
     const syncStatusText = document.getElementById('syncStatusText');
     if (syncStatusText) {
@@ -303,17 +329,27 @@ const OpenSeaRateLimiter = {
 /**
  * Fetch authoritative best active listing for a single token directly from OpenSea
  */
-async function fetchTokenBestListing(tokenId, priority = false) {
+async function fetchTokenBestListing(itemOrKey, priority = false) {
   const apiKey = customApiKey || localStorage.getItem('opensea_api_key') || 'add815580a904473ba7f162c0ccc4926';
   if (!apiKey) return null;
+
+  let item = null;
+  if (typeof itemOrKey === 'object' && itemOrKey !== null) {
+    item = itemOrKey;
+  } else {
+    item = allItems.find(i => getItemKey(i) === itemOrKey || String(i.id) === String(itemOrKey));
+  }
+  if (!item) return null;
 
   if (OpenSeaRateLimiter.isRateLimited()) {
     return { rateLimited: true };
   }
 
+  const colSlug = item.collectionSlug || (item.collection === 'wearables' ? 'bumpkin-wearables' : 'sunflower-land-collectibles');
+
   return OpenSeaRateLimiter.schedule(async () => {
     try {
-      const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/sunflower-land-collectibles/nfts/${tokenId}/best`, {
+      const res = await fetch(`https://api.opensea.io/api/v2/listings/collection/${colSlug}/nfts/${item.id}/best`, {
         headers: {
           'x-api-key': apiKey,
           'accept': 'application/json'
@@ -328,7 +364,6 @@ async function fetchTokenBestListing(tokenId, priority = false) {
       }
 
       if (res.status === 404) {
-        // Officially unlisted or sold out on OpenSea
         return { unlisted: true, price: 0 };
       }
 
@@ -352,8 +387,8 @@ async function fetchTokenBestListing(tokenId, priority = false) {
       const startAmount = Number(offer?.startAmount || '1');
 
       let unitPrice = totalVal;
-      if (isResourceToken(tokenId)) {
-        if (startAmount < 1e18) return null; // ignore micro-dust
+      if (item.collection === 'collectibles' && isResourceToken(item.id)) {
+        if (startAmount < 1e18) return null;
         unitPrice = totalVal / (startAmount / 1e18);
       } else {
         unitPrice = startAmount > 1 ? totalVal / startAmount : totalVal;
@@ -373,15 +408,16 @@ async function fetchTokenBestListing(tokenId, priority = false) {
 /**
  * Verify and update a single item floor in real time
  */
-async function verifySingleItemFloor(tokenId, priority = true) {
-  const item = allItems.find(i => i.id === Number(tokenId));
+async function verifySingleItemFloor(itemOrKey, priority = true) {
+  let item = typeof itemOrKey === 'object' ? itemOrKey : allItems.find(i => getItemKey(i) === itemOrKey || String(i.id) === String(itemOrKey));
   if (!item) return false;
 
-  const result = await fetchTokenBestListing(tokenId, priority);
+  const result = await fetchTokenBestListing(item, priority);
   if (!result || result.rateLimited) return false;
 
+  const itemKey = getItemKey(item);
   let changed = false;
-  liveFloorCache.set(item.id, {
+  liveFloorCache.set(itemKey, {
     price: result.price || 0,
     unlisted: !!result.unlisted,
     currency: result.currency || 'WETH',
@@ -417,7 +453,6 @@ async function verifySingleItemFloor(tokenId, priority = true) {
 
 /**
  * Polite on-demand live floor verification for visible items
- * Checks top items sequentially through the rate limiter without flooding OpenSea
  */
 async function refreshVisibleItemFloors(items, maxCount = 8, force = false) {
   if (!items || !items.length) return;
@@ -426,8 +461,9 @@ async function refreshVisibleItemFloors(items, maxCount = 8, force = false) {
   const now = Date.now();
   const toCheck = items.filter(it => {
     if (force) return true;
-    const cached = liveFloorCache.get(it.id);
-    return !cached || (now - cached.timestamp > 60000); // 60s TTL
+    const itemKey = getItemKey(it);
+    const cached = liveFloorCache.get(itemKey);
+    return !cached || (now - cached.timestamp > 60000);
   }).slice(0, maxCount);
 
   if (!toCheck.length) return;
@@ -437,10 +473,11 @@ async function refreshVisibleItemFloors(items, maxCount = 8, force = false) {
     let hasChanges = false;
     for (const item of toCheck) {
       if (OpenSeaRateLimiter.isRateLimited()) break;
-      const res = await fetchTokenBestListing(item.id, false);
+      const res = await fetchTokenBestListing(item, false);
       if (!res || res.rateLimited) continue;
 
-      liveFloorCache.set(item.id, {
+      const itemKey = getItemKey(item);
+      liveFloorCache.set(itemKey, {
         price: res.price || 0,
         unlisted: !!res.unlisted,
         currency: res.currency || 'WETH',
@@ -478,7 +515,6 @@ async function refreshVisibleItemFloors(items, maxCount = 8, force = false) {
 
 /**
  * Live fetch for SFL / Flower token exchange rate directly from sfl.world
- * Uses ultra-fast edge proxy with fallback and strict timeout to guarantee instant response without hanging
  */
 async function fetchLiveFlowerExchangeRate() {
   const targetUrl = 'https://sfl.world/api/v1.1/exchange';
@@ -503,8 +539,7 @@ async function fetchLiveFlowerExchangeRate() {
 }
 
 /**
- * Live fetch for In-Game Marketplace listings directly from sfl.world
- * Queries real-time active listings (collectibles + wearables) with edge proxy fallback
+ * Live fetch for In-Game Marketplace listings directly from sfl.world (collectibles + wearables)
  */
 async function fetchLiveInGameMarketplace() {
   const targetUrl = 'https://sfl.world/api/v1/nfts';
@@ -518,16 +553,15 @@ async function fetchLiveInGameMarketplace() {
       const res = await fetch(u, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
       if (res.ok) {
         const d = await res.json();
-        let allInGame = [];
-        if (Array.isArray(d)) {
-          allInGame = d;
-        } else if (d) {
-          if (Array.isArray(d.collectibles)) allInGame.push(...d.collectibles);
-          if (Array.isArray(d.wearables)) allInGame.push(...d.wearables);
-          if (Array.isArray(d.data)) allInGame.push(...d.data);
+        const list = [];
+        if (d?.collectibles && Array.isArray(d.collectibles)) {
+          d.collectibles.forEach(c => list.push({ ...c, collection: 'collectibles' }));
         }
-        if (allInGame.length > 0) {
-          return allInGame;
+        if (d?.wearables && Array.isArray(d.wearables)) {
+          d.wearables.forEach(w => list.push({ ...w, collection: 'wearables' }));
+        }
+        if (list.length > 0) {
+          return list;
         }
       }
     } catch {}
@@ -536,11 +570,98 @@ async function fetchLiveInGameMarketplace() {
 }
 
 /**
+ * Live fetch for recent listing and sale events from OpenSea for both collections
+ */
+async function fetchLiveOpenSeaUpdates() {
+  const apiKey = customApiKey || localStorage.getItem('opensea_api_key') || 'add815580a904473ba7f162c0ccc4926';
+  if (!apiKey || OpenSeaRateLimiter.isRateLimited()) return;
+
+  const collections = ['collectibles', 'wearables'];
+  for (const col of collections) {
+    const slug = COLLECTIONS[col].slug;
+    try {
+      const [listRes, saleRes] = await Promise.allSettled([
+        fetch(`https://api.opensea.io/api/v2/events/collection/${slug}?event_type=listing&limit=50&_t=${Date.now()}`, {
+          headers: { 'x-api-key': apiKey, 'accept': 'application/json' },
+          cache: 'no-store',
+          signal: AbortSignal.timeout(7000)
+        }),
+        fetch(`https://api.opensea.io/api/v2/events/collection/${slug}?event_type=sale&limit=50&_t=${Date.now()}`, {
+          headers: { 'x-api-key': apiKey, 'accept': 'application/json' },
+          cache: 'no-store',
+          signal: AbortSignal.timeout(7000)
+        })
+      ]);
+
+      if (listRes.status === 'fulfilled' && listRes.value.status === 429) {
+        OpenSeaRateLimiter.handleRateLimit();
+        return;
+      }
+      if (saleRes.status === 'fulfilled' && saleRes.value.status === 429) {
+        OpenSeaRateLimiter.handleRateLimit();
+        return;
+      }
+
+      const listData = listRes.status === 'fulfilled' && listRes.value.ok ? await listRes.value.json() : null;
+      const saleData = saleRes.status === 'fulfilled' && saleRes.value.ok ? await saleRes.value.json() : null;
+
+      let catalogChanged = false;
+
+      if (listData?.asset_events) {
+        for (const ev of listData.asset_events) {
+          const id = Number(ev.asset?.identifier);
+          if (!id) continue;
+          const targetKey = `${col}_${id}`;
+          const item = allItems.find(i => getItemKey(i) === targetKey);
+          if (!item) continue;
+
+          const dec = ev.payment?.decimals || 18;
+          const price = ev.payment?.quantity ? (Number(ev.payment.quantity) / Math.pow(10, dec)) : 0;
+          const ts = (ev.event_timestamp || 0) * 1000;
+
+          if (price > 0 && (!item.lastListedTimestamp || ts > item.lastListedTimestamp)) {
+            item.recentlyListed = true;
+            item.lastListedTimestamp = ts;
+            item.lastListedPrice = price;
+            catalogChanged = true;
+          }
+        }
+      }
+
+      if (saleData?.asset_events) {
+        for (const ev of saleData.asset_events) {
+          const id = Number(ev.asset?.identifier || ev.nft?.identifier);
+          if (!id) continue;
+          const targetKey = `${col}_${id}`;
+          const item = allItems.find(i => getItemKey(i) === targetKey);
+          if (!item) continue;
+
+          const dec = ev.payment?.decimals || 18;
+          const price = ev.payment?.quantity ? (Number(ev.payment.quantity) / Math.pow(10, dec)) : 0;
+          const ts = (ev.event_timestamp || 0) * 1000;
+
+          if (price > 0 && (!item.lastSaleTimestamp || ts > item.lastSaleTimestamp)) {
+            item.recentlySold = true;
+            item.lastSaleTimestamp = ts;
+            item.lastSalePrice = price;
+            item.lastSaleCurrency = ev.payment?.symbol || 'WETH';
+            catalogChanged = true;
+          }
+        }
+      }
+
+      if (catalogChanged) {
+        applyFiltersAndSort(false);
+      }
+    } catch {}
+  }
+}
+
+/**
  * Automatically sync all 3 data feeds:
  * 1. data/prices.json (Full catalog with floor prices & metadata)
  * 2. data/exchange.json (Live SFL/Flower token exchange rate)
  * 3. data/ingame_nfts.json (SFL In-game marketplace items)
- * Concurrently with live DEX rate & OpenSea API v2 updates
  */
 async function syncAllDataOnWebOpen(forceRefresh = false) {
   const syncStatusText = document.getElementById('syncStatusText');
@@ -549,16 +670,21 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
     syncStatusText.textContent = 'Syncing live data feeds (Prices, Exchange, In-Game)...';
   }
   if (syncDot) {
-    syncDot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping';
+    syncDot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse';
   }
 
   try {
     const timestamp = Date.now();
     const noStore = { cache: 'no-store' };
-    const baseHref = window.location.href.split('?')[0].split('#')[0];
-    const feedBase = baseHref.endsWith('/') ? baseHref : baseHref.substring(0, baseHref.lastIndexOf('/') + 1);
 
-    // 1. Concurrently fetch all data feeds + live sfl.world exchange API + live in-game marketplace + live ETH market price
+    // Resolve base path dynamically
+    let feedBase = './';
+    try {
+      const loc = window.location.href.split('?')[0].split('#')[0];
+      const lastSlash = loc.lastIndexOf('/');
+      feedBase = loc.substring(0, lastSlash + 1);
+    } catch {}
+
     const [pricesRes, exchangeRes, inGameRes, directRate, liveInGameMarket, ethRes] = await Promise.allSettled([
       fetch(`${feedBase}data/prices.json?v=${timestamp}`, noStore).then(r => r.ok ? r.json() : null),
       fetch(`${feedBase}data/exchange.json?v=${timestamp}`, noStore).then(r => r.ok ? r.json() : null),
@@ -600,22 +726,58 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
       statFlowerRate.textContent = '$' + flowerUsdcRate.toFixed(4);
     }
 
-    // 3. Parse In-Game marketplace items (preferring real-time live feed if available)
+    // 3. Parse In-Game marketplace items by composite key (collectibles_ID vs wearables_ID)
     const inGameMap = new Map();
     const isLiveInGame = Boolean(liveMarketList && liveMarketList.length > 0);
-    const rawList = isLiveInGame
-      ? liveMarketList
-      : (inGameData?.collectibles || inGameData?.data || (Array.isArray(inGameData) ? inGameData : []));
-
-    for (const item of rawList) {
-      if (item.id != null) {
-        inGameMap.set(Number(item.id), {
-          floor: item.floor != null ? Number(item.floor) : null,
-          lastSalePrice: item.lastSalePrice != null ? Number(item.lastSalePrice) : null,
-          supply: item.supply != null ? Number(item.supply) : null,
-          name: item.name || '',
-          haveBoost: item.have_boost === 1,
-          boostText: item.boost_text || ''
+    
+    if (isLiveInGame) {
+      for (const item of liveMarketList) {
+        if (item.id != null) {
+          const col = item.collection || 'collectibles';
+          const key = `${col}_${item.id}`;
+          inGameMap.set(key, {
+            id: Number(item.id),
+            collection: col,
+            floor: item.floor != null ? Number(item.floor) : null,
+            lastSalePrice: item.lastSalePrice != null ? Number(item.lastSalePrice) : null,
+            supply: item.supply != null ? Number(item.supply) : null,
+            name: item.name || '',
+            haveBoost: item.have_boost === 1,
+            boostText: item.boost_text || ''
+          });
+        }
+      }
+    } else if (inGameData) {
+      if (Array.isArray(inGameData.collectibles)) {
+        inGameData.collectibles.forEach(item => {
+          if (item.id != null) {
+            inGameMap.set(`collectibles_${item.id}`, {
+              id: Number(item.id),
+              collection: 'collectibles',
+              floor: item.floor != null ? Number(item.floor) : null,
+              lastSalePrice: item.lastSalePrice != null ? Number(item.lastSalePrice) : null,
+              supply: item.supply != null ? Number(item.supply) : null,
+              name: item.name || '',
+              haveBoost: item.have_boost === 1,
+              boostText: item.boost_text || ''
+            });
+          }
+        });
+      }
+      if (Array.isArray(inGameData.wearables)) {
+        inGameData.wearables.forEach(item => {
+          if (item.id != null) {
+            inGameMap.set(`wearables_${item.id}`, {
+              id: Number(item.id),
+              collection: 'wearables',
+              floor: item.floor != null ? Number(item.floor) : null,
+              lastSalePrice: item.lastSalePrice != null ? Number(item.lastSalePrice) : null,
+              supply: item.supply != null ? Number(item.supply) : null,
+              name: item.name || '',
+              haveBoost: item.have_boost === 1,
+              boostText: item.boost_text || ''
+            });
+          }
         });
       }
     }
@@ -627,12 +789,12 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
       } else {
         const liveMap = new Map();
         allItems.forEach(i => {
-          if (i._liveVerified) liveMap.set(i.id, i);
+          if (i._liveVerified) liveMap.set(getItemKey(i), i);
         });
 
         allItems = pricesData.items.map(pItem => {
-          const live = liveMap.get(pItem.id);
-          // Only preserve live price if it was verified recently (within 2 minutes) AND this is not a force refresh
+          const itemKey = getItemKey(pItem);
+          const live = liveMap.get(itemKey);
           const liveStillFresh = !forceRefresh && live && live._liveTimestamp && (Date.now() - live._liveTimestamp < 120000);
           if (liveStillFresh) {
             return {
@@ -659,12 +821,12 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
       throw new Error('Could not load collectible prices from data feeds.');
     }
 
-    // 5. Merge In-Game data & live exchange rates into allItems
+    // 5. Merge In-Game data & live exchange rates into allItems using composite keys
     for (const item of allItems) {
-      const inGameInfo = inGameMap.get(Number(item.id));
+      const itemKey = getItemKey(item);
+      const inGameInfo = inGameMap.get(itemKey);
       if (inGameInfo) {
         if (inGameInfo.floor !== null) {
-          // If we got live marketplace data OR item has no floor yet, update it
           if (isLiveInGame || item.inGameFloor == null) {
             item.inGameFloor = inGameInfo.floor;
           }
@@ -676,14 +838,13 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
           item.boostText = inGameInfo.boostText;
           item.haveBoost = inGameInfo.haveBoost;
         }
-        if ((!item.name || item.name.startsWith('Sunflower Land #')) && inGameInfo.name) {
+        if ((!item.name || item.name.startsWith('Sunflower Land #') || item.name.startsWith('Wearable #')) && inGameInfo.name) {
           item.name = inGameInfo.name;
         }
         if (inGameInfo.supply && item.supply <= 1) {
           item.supply = inGameInfo.supply;
         }
       } else {
-        // If live in-game marketplace data was retrieved and item is missing, it was purchased / unlisted in-game
         if (isLiveInGame && inGameMap.size > 20) {
           item.inGameFloor = null;
           item.inGameFloorUsdc = null;
@@ -694,11 +855,10 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
     }
 
     totalCountEl.textContent = allItems.length;
-    // Always use current live timestamp for accurate user visibility
     computeClientStats(allItems, 'Live Synced (OpenSea & In-Game)', new Date(), flowerUsdcRate);
     applyFiltersAndSort(false);
 
-    // 6. Polite background verification for top visible items (staggered & rate-limited)
+    // 6. Polite background verification for top visible items
     if (filteredItems.length > 0) {
       setTimeout(() => {
         refreshVisibleItemFloors(filteredItems, 8);
@@ -712,10 +872,12 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
     if (syncDot) {
       syncDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse';
     }
-    errorState.classList.add('hidden');
-    console.log(`✅ Live synced 3 feeds: prices.json (${allItems.length} items), rate: $${flowerUsdcRate.toFixed(4)}, in-game: ${inGameMap.size} items`);
+
+    // 8. Fetch live OpenSea events in background
+    fetchLiveOpenSeaUpdates();
+
   } catch (err) {
-    console.error('Error during auto-sync:', err);
+    console.error('Error in syncAllDataOnWebOpen:', err);
     if (syncStatusText) {
       syncStatusText.textContent = 'Sync notice: using cached feeds';
     }
@@ -732,31 +894,29 @@ async function syncAllDataOnWebOpen(forceRefresh = false) {
 }
 
 /**
- * Backwards compatibility alias for loadData
- */
-async function loadData(forceRefresh = false) {
-  return syncAllDataOnWebOpen(forceRefresh);
-}
-
-/**
  * Filter & Sort items locally
  */
 function applyFiltersAndSort(checkLive = true) {
   let result = [...allItems];
 
-  // 1. Safe Text Search Filter (matches name, token ID with/without #, or utility boost)
+  // 1. Text Search Filter (matches name, token ID, boost, or collection name)
   if (currentSearch) {
     const cleanQ = currentSearch.replace(/^#/, '').toLowerCase().trim();
     result = result.filter(item => {
       const name = (item.name || '').toLowerCase();
       const idStr = String(item.id || '');
       const boost = (item.boostText || '').toLowerCase();
-      return name.includes(cleanQ) || idStr.includes(cleanQ) || boost.includes(cleanQ);
+      const col = (item.collection || 'collectibles').toLowerCase();
+      return name.includes(cleanQ) || idStr.includes(cleanQ) || boost.includes(cleanQ) || col.includes(cleanQ);
     });
   }
 
   // 2. Category Filter
-  if (currentFilter === 'diff') {
+  if (currentFilter === 'collectibles') {
+    result = result.filter(item => item.collection === 'collectibles' || !item.collection);
+  } else if (currentFilter === 'wearables') {
+    result = result.filter(item => item.collection === 'wearables');
+  } else if (currentFilter === 'diff') {
     result = result.filter(item => {
       const isListed = !item.unlisted && ((item.rawPrice && item.rawPrice > 0) || (item.floorPrice && item.floorPrice > 0));
       const hasInGame = item.inGameFloor && item.inGameFloor > 0;
@@ -768,19 +928,6 @@ function applyFiltersAndSort(checkLive = true) {
     result = result.filter(item => !item.haveBoost);
   } else if (currentFilter === 'recently-listed') {
     result = result.filter(item => item.recentlyListed);
-    result.sort((a, b) => {
-      const aTime = a.lastListedTimestamp || (a.orderCreatedAt ? a.orderCreatedAt * 1000 : 0);
-      const bTime = b.lastListedTimestamp || (b.orderCreatedAt ? b.orderCreatedAt * 1000 : 0);
-      return bTime - aTime;
-    });
-  } else if (currentFilter === 'tier-cheap') {
-    result = result.filter(item => !item.unlisted && item.rawPrice > 0 && item.rawPrice < 0.0005);
-  } else if (currentFilter === 'tier-mid') {
-    result = result.filter(item => !item.unlisted && item.rawPrice >= 0.0005 && item.rawPrice <= 0.005);
-  } else if (currentFilter === 'tier-high') {
-    result = result.filter(item => !item.unlisted && item.rawPrice > 0.005);
-  } else if (currentFilter === 'unlisted') {
-    result = result.filter(item => item.unlisted && (!item.inGameFloor || item.inGameFloor <= 0));
   }
 
   // Helper to get precise Price Diff (Net Game - OpenSea Equiv)
@@ -942,6 +1089,12 @@ function renderGridView() {
     const inGamePriceDisplay = hasInGame ? formatFlowerPrice(item.inGameFloor) : 'Unlisted';
     const inGameUsdcDisplay = hasInGame ? formatFlowerUsdc(item.inGameFloor) : '';
 
+    const itemKey = getItemKey(item);
+    const isWearable = item.collection === 'wearables';
+    const collectionBadge = isWearable
+      ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30">👕 Wearable</span>`
+      : `<span class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">🌻 Collectible</span>`;
+
     const boostBadge = item.haveBoost
       ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" title="${item.boostText}">
           <span>⚡ Boost</span>
@@ -996,7 +1149,6 @@ function renderGridView() {
           <div class="flex items-center space-x-1.5">
             <span class="w-1.5 h-1.5 rounded-full ${isPositive ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}"></span>
             <span class="text-[10px] font-bold tracking-wider uppercase text-slate-300">Price Diff</span>
-            <span class="text-[9px] text-slate-500 hidden sm:inline">(Net Game − OS Equiv)</span>
           </div>
           <div class="font-mono font-bold text-xs flex items-baseline space-x-1">
             <span class="${isPositive ? 'text-emerald-400' : 'text-rose-400'}">${sflFormatted}</span>
@@ -1017,13 +1169,16 @@ function renderGridView() {
     }
 
     return `
-      <div class="collectible-card bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 flex flex-col justify-between space-y-3 relative group">
+      <div class="collectible-card bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 flex flex-col justify-between space-y-3 relative group" data-item-key="${itemKey}">
         <div>
-          <!-- Header: ID + Badges -->
+          <!-- Header: ID + Collection + Badges -->
           <div class="flex items-center justify-between mb-2">
-            <span class="font-mono text-[11px] text-slate-400 font-semibold bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
-              #${item.id}
-            </span>
+            <div class="flex items-center space-x-1.5">
+              <span class="font-mono text-[11px] text-slate-400 font-semibold bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
+                #${item.id}
+              </span>
+              ${collectionBadge}
+            </div>
             <div class="flex items-center space-x-1.5">
               ${recentListedBadge}
               ${boostBadge}
@@ -1054,7 +1209,7 @@ function renderGridView() {
                     <span class="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">OpenSea</span>
                   </div>
                   <div class="flex items-center space-x-1">
-                    <button class="verify-token-btn text-slate-500 hover:text-amber-400 transition p-0.5 rounded cursor-pointer" data-token-id="${item.id}" title="Check live OpenSea floor">
+                    <button class="verify-token-btn text-slate-500 hover:text-amber-400 transition p-0.5 rounded cursor-pointer" data-item-key="${itemKey}" title="Check live OpenSea floor">
                       <i data-lucide="refresh-cw" class="w-2.5 h-2.5"></i>
                     </button>
                     <span class="text-[9px] font-medium px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">WETH</span>
@@ -1100,7 +1255,6 @@ function renderGridView() {
                 </div>
                 ${hasInGame ? `
                   <div class="space-y-1.5">
-                    <!-- Standard Price & USDC below it -->
                     <div>
                       <div class="text-xs font-black text-pink-400 tracking-tight">
                         ${inGamePriceDisplay} <span class="text-[9px] font-bold text-pink-300/80">SFL</span>
@@ -1108,7 +1262,6 @@ function renderGridView() {
                       ${inGameUsdcDisplay ? `<div class="text-[10px] text-emerald-400 font-mono font-medium">${inGameUsdcDisplay}</div>` : ''}
                     </div>
 
-                    <!-- -10% Price & USDC below it -->
                     <div class="pt-1.5 border-t border-pink-500/20">
                       <div class="text-[9px] uppercase tracking-wider text-slate-400 font-medium">After -10% Fee</div>
                       <div class="flex items-baseline justify-between mt-0.5">
@@ -1137,8 +1290,8 @@ function renderGridView() {
           </div>
 
           <!-- OpenSea Action Button -->
-          <a href="${getOpenSeaUrl(item.id)}" target="_blank" rel="noopener noreferrer" 
-             data-token-id="${item.id}"
+          <a href="${getOpenSeaUrl(item)}" target="_blank" rel="noopener noreferrer" 
+             data-item-key="${itemKey}"
              class="buy-opensea-btn w-full mt-1 inline-flex items-center justify-center space-x-1.5 py-2 rounded-xl text-xs font-semibold bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/30 hover:border-blue-500 transition shadow-sm group-hover:shadow-blue-500/20">
             <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
             <span>${isListed ? 'Buy on OpenSea' : 'View on OpenSea'}</span>
@@ -1162,6 +1315,12 @@ function renderTableView() {
     const hasInGame = item.inGameFloor && item.inGameFloor > 0;
     const inGamePriceDisplay = hasInGame ? formatFlowerPrice(item.inGameFloor) : 'Unlisted';
     const inGameUsdcDisplay = hasInGame ? formatFlowerUsdc(item.inGameFloor) : '';
+
+    const itemKey = getItemKey(item);
+    const isWearable = item.collection === 'wearables';
+    const collectionBadge = isWearable
+      ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30">👕 Wearable</span>`
+      : `<span class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">🌻 Collectible</span>`;
 
     const boostBadge = item.haveBoost
       ? `<span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" title="${item.boostText}">
@@ -1189,8 +1348,9 @@ function renderTableView() {
       <tr class="hover:bg-slate-800/40 transition">
         <td class="py-3 px-4 font-mono text-slate-400 font-semibold">#${item.id}</td>
         <td class="py-3 px-4 font-bold text-white">
-          <div class="flex items-center flex-wrap gap-1">
+          <div class="flex items-center flex-wrap gap-1.5">
             <span>${item.name}</span>
+            ${collectionBadge}
             ${recentListedBadge}
           </div>
         </td>
@@ -1203,7 +1363,7 @@ function renderTableView() {
         <!-- OpenSea Floor -->
         <td class="py-3 px-4 text-right">
           <div class="inline-flex items-center justify-end space-x-1.5">
-            <button class="verify-token-btn text-slate-500 hover:text-amber-400 transition p-0.5 rounded cursor-pointer" data-token-id="${item.id}" title="Check live OpenSea floor">
+            <button class="verify-token-btn text-slate-500 hover:text-amber-400 transition p-0.5 rounded cursor-pointer" data-item-key="${itemKey}" title="Check live OpenSea floor">
               <i data-lucide="refresh-cw" class="w-3 h-3"></i>
             </button>
             <div>
@@ -1270,8 +1430,8 @@ function renderTableView() {
         </td>
         <!-- Actions -->
         <td class="py-3 px-4 text-center">
-          <a href="${getOpenSeaUrl(item.id)}" target="_blank" rel="noopener noreferrer" 
-             data-token-id="${item.id}"
+          <a href="${getOpenSeaUrl(item)}" target="_blank" rel="noopener noreferrer" 
+             data-item-key="${itemKey}"
              class="buy-opensea-btn inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-blue-600/10 text-blue-400 hover:bg-blue-600 hover:text-white border border-blue-500/20 transition">
             <i data-lucide="external-link" class="w-3 h-3"></i>
             <span>${isListed ? 'Buy' : 'View'}</span>
@@ -1353,19 +1513,14 @@ if (viewTableBtn) {
   });
 }
 
-// =========================================================================
-// Auto-Refresh & Limit Timer Management (Every 20 Seconds with Double-Refresh Prevention)
-// =========================================================================
+// Auto-Refresh & Limit Timer Management
 let isGlobalRefreshing = false;
-const AUTO_REFRESH_INTERVAL_SECONDS = 20; // Auto-refresh every 20s
-const BUTTON_LIMIT_COOLDOWN_SECONDS = 8; // Limit timer on button to prevent spamming
+const AUTO_REFRESH_INTERVAL_SECONDS = 20;
+const BUTTON_LIMIT_COOLDOWN_SECONDS = 8;
 let autoRefreshCountdown = AUTO_REFRESH_INTERVAL_SECONDS;
 let buttonCooldownCountdown = 0;
 let autoRefreshInterval = null;
 
-/**
- * Update the Refresh button UI state and countdown timer
- */
 function updateRefreshButtonUi() {
   const refreshBtn = document.getElementById('refreshBtn');
   const refreshIcon = document.getElementById('refreshIcon');
@@ -1382,11 +1537,9 @@ function updateRefreshButtonUi() {
     return;
   }
 
-  // Not currently refreshing
   if (refreshIcon) refreshIcon.classList.remove('animate-spin-custom');
 
   if (buttonCooldownCountdown > 0) {
-    // Under button limit cooldown (prevent double-clicks/spam)
     refreshBtn.disabled = true;
     if (refreshBtnLabel) refreshBtnLabel.textContent = 'Wait';
     if (refreshTimerBadge) {
@@ -1394,7 +1547,6 @@ function updateRefreshButtonUi() {
       refreshTimerBadge.title = `Cooldown active (${buttonCooldownCountdown}s remaining)`;
     }
   } else {
-    // Idle & ready for manual click, showing countdown to next auto-refresh
     refreshBtn.disabled = false;
     if (refreshBtnLabel) refreshBtnLabel.textContent = 'Refresh';
     if (refreshTimerBadge) {
@@ -1404,11 +1556,7 @@ function updateRefreshButtonUi() {
   }
 }
 
-/**
- * Perform a controlled, safe data refresh (Zero double-refresh concurrency)
- */
 async function performControlledRefresh(source = 'auto') {
-  // STRICT MUTEX: If a refresh is already in progress, reject all concurrent triggers
   if (isGlobalRefreshing) {
     console.log(`[AutoRefresh] ⏳ Refresh already running (ignoring ${source} call)`);
     return;
@@ -1431,17 +1579,12 @@ async function performControlledRefresh(source = 'auto') {
 
   try {
     if (source === 'manual' && filteredItems.length > 0) {
-      // Clear cache for top visible items on manual refresh
-      filteredItems.slice(0, 8).forEach(it => liveFloorCache.delete(it.id));
+      filteredItems.slice(0, 8).forEach(it => liveFloorCache.delete(getItemKey(it)));
     }
 
-    // 1. Fetch latest prices, in-game rates, and DEX exchange rates
     await syncAllDataOnWebOpen(source === 'manual');
-
-    // 2. Re-verify any pending user purchases
     await checkPendingPurchases();
 
-    // 3. Polite live verification for top visible items (via rate limiter)
     if (filteredItems.length > 0 && !OpenSeaRateLimiter.isRateLimited()) {
       await refreshVisibleItemFloors(filteredItems, 8, source === 'manual');
     }
@@ -1460,10 +1603,6 @@ async function performControlledRefresh(source = 'auto') {
   }
 }
 
-/**
- * Main 1-second interval timer tick
- * Handles both the 20s auto-refresh countdown and the button limit timer
- */
 function initAutoRefreshAndTimer() {
   if (autoRefreshInterval) clearInterval(autoRefreshInterval);
 
@@ -1472,12 +1611,10 @@ function initAutoRefreshAndTimer() {
   updateRefreshButtonUi();
 
   autoRefreshInterval = setInterval(() => {
-    // Decrement button limit cooldown
     if (buttonCooldownCountdown > 0) {
       buttonCooldownCountdown--;
     }
 
-    // Decrement auto-refresh countdown
     if (!isGlobalRefreshing) {
       autoRefreshCountdown--;
 
@@ -1491,24 +1628,19 @@ function initAutoRefreshAndTimer() {
   }, 1000);
 }
 
-// Refresh button with limit cooldown & double-refresh lock
 if (refreshBtn) {
   refreshBtn.addEventListener('click', async () => {
-    // Double refresh check: if cooling down or currently refreshing, reject click!
     if (isGlobalRefreshing || buttonCooldownCountdown > 0) {
       return;
     }
 
-    // Set button limit timer (8s cooldown)
     buttonCooldownCountdown = BUTTON_LIMIT_COOLDOWN_SECONDS;
-    // Reset auto-refresh countdown so it doesn't trigger immediately after manual click
     autoRefreshCountdown = AUTO_REFRESH_INTERVAL_SECONDS;
 
     await performControlledRefresh('manual');
   });
 }
 
-// Reset filters
 if (resetFiltersBtn) {
   resetFiltersBtn.addEventListener('click', () => {
     searchInput.value = '';
@@ -1525,11 +1657,7 @@ if (resetFiltersBtn) {
   });
 }
 
-/**
- * Synchronize UI controls (filter pills, sort dropdown, grid/table view buttons) with current user preferences
- */
 function syncUiPreferences() {
-  // Sync filter pill buttons
   document.querySelectorAll('.filter-pill').forEach(btn => {
     if (btn.dataset.filter === currentFilter) {
       btn.classList.add('active');
@@ -1538,12 +1666,10 @@ function syncUiPreferences() {
     }
   });
 
-  // Sync sort select dropdown
   if (sortSelect) {
     sortSelect.value = currentSort;
   }
 
-  // Sync view toggle buttons
   if (currentView === 'table') {
     if (viewTableBtn) {
       viewTableBtn.classList.add('bg-slate-800', 'text-amber-400');
@@ -1589,17 +1715,6 @@ if (openSettingsBtn && settingsModal) {
       const apiKey = openseaApiKeyInput ? openseaApiKeyInput.value.trim() : '';
       customApiKey = apiKey;
       localStorage.setItem('opensea_api_key', apiKey);
-
-      try {
-        await fetch('/api/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ apiKey })
-        });
-      } catch {
-        // static mode
-      }
-
       settingsModal.classList.add('hidden');
       syncAllDataOnWebOpen(true);
     });
@@ -1620,35 +1735,33 @@ window.addEventListener('keydown', (e) => {
 // Track user clicks on "Buy on OpenSea" to immediately re-verify when returning to app
 document.addEventListener('click', (e) => {
   const btn = e.target.closest('.buy-opensea-btn');
-  if (btn && btn.dataset.tokenId) {
-    const id = Number(btn.dataset.tokenId);
-    if (id) {
-      pendingPurchaseTokenIds.add(id);
-      liveFloorCache.delete(id);
-    }
+  if (btn && btn.dataset.itemKey) {
+    const key = btn.dataset.itemKey;
+    pendingPurchaseTokenIds.add(key);
+    liveFloorCache.delete(key);
   }
 });
 
 async function checkPendingPurchases() {
   if (!pendingPurchaseTokenIds.size) return;
-  const ids = Array.from(pendingPurchaseTokenIds);
+  const keys = Array.from(pendingPurchaseTokenIds);
   pendingPurchaseTokenIds.clear();
-  for (const id of ids) {
-    await verifySingleItemFloor(id, true);
+  for (const key of keys) {
+    await verifySingleItemFloor(key, true);
   }
 }
 
 // Click handler for per-item live OpenSea floor verification
 document.addEventListener('click', async (e) => {
   const btn = e.target.closest('.verify-token-btn');
-  if (btn && btn.dataset.tokenId) {
+  if (btn && btn.dataset.itemKey) {
     e.preventDefault();
     e.stopPropagation();
-    const id = Number(btn.dataset.tokenId);
+    const key = btn.dataset.itemKey;
     const icon = btn.querySelector('[data-lucide="refresh-cw"], svg');
     if (icon) icon.classList.add('animate-spin-custom');
     try {
-      const ok = await verifySingleItemFloor(id, true);
+      const ok = await verifySingleItemFloor(key, true);
       if (ok) {
         btn.classList.add('text-emerald-400');
         setTimeout(() => btn.classList.remove('text-emerald-400'), 1500);
@@ -1661,7 +1774,6 @@ document.addEventListener('click', async (e) => {
 
 let lastVisibilityCheckTime = 0;
 
-// When tab becomes active or focused (e.g. user just completed purchase on OpenSea)
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     const now = Date.now();
@@ -1684,10 +1796,8 @@ document.addEventListener('DOMContentLoaded', () => {
     lucide.createIcons();
   }
 
-  // Restore saved UI preferences (filter, sort dropdown, view mode)
   syncUiPreferences();
 
-  // 1. Instant display if pre-bundled data exists (zero delay)
   if (window.INITIAL_COLLECTIBLES_DATA && window.INITIAL_COLLECTIBLES_DATA.items && window.INITIAL_COLLECTIBLES_DATA.items.length > 0) {
     allItems = window.INITIAL_COLLECTIBLES_DATA.items;
     flowerUsdcRate = window.INITIAL_COLLECTIBLES_DATA.flowerUsdcRate || flowerUsdcRate;
@@ -1698,10 +1808,6 @@ document.addEventListener('DOMContentLoaded', () => {
     showLoading(true);
   }
 
-  // 2. Automatically sync all 3 feeds (prices.json, exchange.json, ingame_nfts.json) + live APIs on web open!
   syncAllDataOnWebOpen(true);
-
-  // 3. Start auto-refresh every 20 seconds with button limit timer (double-refresh protected)
   initAutoRefreshAndTimer();
 });
-
